@@ -54,6 +54,19 @@ class TransactionRepositoryTest {
     }
 
     @Test
+    void keepsTheOriginalUtcOffsetAfterReload() {
+        OffsetDateTime submitted = OffsetDateTime.of(2026, 10, 25, 2, 30, 0, 0, ZoneOffset.ofHoursMinutes(-5, 0));
+        Transaction tx = transaction("card-1", "10.00", submitted, 0, Decision.APPROVE);
+        repository.saveAndFlush(tx);
+        entityManager.clear();
+
+        Transaction loaded = repository.findById(tx.getId()).orElseThrow();
+
+        assertThat(loaded.getTransactionTime()).isEqualTo(submitted);
+        assertThat(loaded.getTransactionTime().getOffset()).isEqualTo(ZoneOffset.ofHours(-5));
+    }
+
+    @Test
     void historyIsNewestFirstAndScopedToCard() {
         repository.save(transaction("card-1", "10.00", BASE.minusHours(3), 0, Decision.APPROVE));
         repository.save(transaction("card-1", "20.00", BASE.minusHours(1), 0, Decision.APPROVE));

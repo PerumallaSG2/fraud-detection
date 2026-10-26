@@ -94,6 +94,28 @@ class TransactionControllerTest {
     }
 
     @Test
+    void postWithMoreThanTwoDecimalsInAmountReturns400() throws Exception {
+        String body = VALID_BODY.replace("120.50", "120.505");
+
+        mockMvc.perform(post("/api/transactions").contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors.length()").value(1))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("amount"));
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    void postWithOneOrTwoDecimalsInAmountIsAccepted() throws Exception {
+        when(service.create(any())).thenReturn(response());
+
+        for (String amount : new String[] {"120", "120.5", "120.50"}) {
+            mockMvc.perform(post("/api/transactions").contentType(MediaType.APPLICATION_JSON)
+                            .content(VALID_BODY.replace("120.50", amount)))
+                    .andExpect(status().isCreated());
+        }
+    }
+
+    @Test
     void postWithMissingFieldsReturns400() throws Exception {
         mockMvc.perform(post("/api/transactions").contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isBadRequest())

@@ -9,8 +9,10 @@ import jakarta.persistence.Id;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -44,8 +46,12 @@ public class Transaction {
     @Column(nullable = false)
     private double longitude;
 
+    /** The instant; the database keeps no offset, so it is stored separately in {@code transactionOffsetSeconds}. */
     @Column(name = "transaction_time", nullable = false)
-    private OffsetDateTime transactionTime;
+    private Instant transactionTime;
+
+    @Column(name = "transaction_offset_seconds", nullable = false)
+    private int transactionOffsetSeconds;
 
     @Column(name = "risk_score", nullable = false)
     private int riskScore;
@@ -68,13 +74,14 @@ public class Transaction {
                        int riskScore, Decision decision) {
         this.id = UUID.randomUUID();
         this.cardId = cardId;
-        this.amount = amount;
+        this.amount = amount.setScale(2, RoundingMode.UNNECESSARY);   // NUMERIC(19,2); the API rejects more decimals, so never rounds
         this.merchant = merchant;
         this.merchantCategory = merchantCategory;
         this.city = city;
         this.latitude = latitude;
         this.longitude = longitude;
-        this.transactionTime = transactionTime;
+        this.transactionTime = transactionTime.toInstant();
+        this.transactionOffsetSeconds = transactionTime.getOffset().getTotalSeconds();
         this.riskScore = riskScore;
         this.decision = decision;
         this.createdAt = Instant.now();
@@ -117,8 +124,9 @@ public class Transaction {
         return longitude;
     }
 
+    /** The transaction time in the offset it was submitted with. */
     public OffsetDateTime getTransactionTime() {
-        return transactionTime;
+        return transactionTime.atOffset(ZoneOffset.ofTotalSeconds(transactionOffsetSeconds));
     }
 
     public int getRiskScore() {

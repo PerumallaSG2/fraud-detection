@@ -51,12 +51,24 @@ class TransactionFlowIntegrationTest {
         assertThat(stored.city()).isEqualTo("Austin");
         assertThat(stored.latitude()).isEqualTo(30.27);
         assertThat(stored.longitude()).isEqualTo(-97.74);
-        // The database keeps the instant, not the original offset.
-        assertThat(stored.timestamp().toInstant()).isEqualTo(OffsetDateTime.parse("2026-10-25T12:00:00-05:00").toInstant());
+        // GET returns the same timestamp, offset included, as POST did.
+        assertThat(stored.timestamp()).isEqualTo(OffsetDateTime.parse("2026-10-25T12:00:00-05:00"));
+        assertThat(stored.timestamp()).isEqualTo(body.timestamp());
         assertThat(stored.riskScore()).isZero();
         assertThat(stored.decision()).isEqualTo(Decision.APPROVE);
         assertThat(stored.triggeredRules()).isEmpty();
         assertThat(stored.createdAt()).isNotNull();
+    }
+
+    @Test
+    void amountsAlwaysHaveTwoDecimalsInPostAndGet() {
+        ResponseEntity<String> created = http.postForEntity("/api/transactions",
+                new TransactionRequest(cardId, new BigDecimal("7"), "Shop", "GROCERY", "Austin", 30.27, -97.74,
+                        OffsetDateTime.parse("2026-10-25T12:00:00Z")), String.class);
+        ResponseEntity<String> fetched = http.getForEntity(created.getHeaders().getLocation(), String.class);
+
+        assertThat(created.getBody()).contains("\"amount\":7.00");
+        assertThat(fetched.getBody()).contains("\"amount\":7.00");
     }
 
     @Test
