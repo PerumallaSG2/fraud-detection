@@ -5,6 +5,8 @@ import com.gopi.fraud.domain.Transaction;
 import com.gopi.fraud.dto.TransactionRequest;
 import com.gopi.fraud.dto.TransactionResponse;
 import com.gopi.fraud.dto.TriggeredRuleDto;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -21,7 +23,7 @@ public class TransactionMapper {
     }
 
     public TransactionResponse toResponse(Transaction transaction) {
-        return new TransactionResponse(transaction.getId(), transaction.getCardId(), transaction.getAmount(),
+        return new TransactionResponse(transaction.getId(), transaction.getCardId(), twoDecimals(transaction.getAmount()),
                 transaction.getMerchant(), transaction.getMerchantCategory(), transaction.getCity(),
                 transaction.getLatitude(), transaction.getLongitude(), transaction.getTransactionTime(),
                 transaction.getRiskScore(), transaction.getDecision(),
@@ -29,5 +31,13 @@ public class TransactionMapper {
                         .map(hit -> new TriggeredRuleDto(hit.getRuleName(), hit.getPoints(), hit.getReason()))
                         .toList(),
                 transaction.getCreatedAt());
+    }
+
+    /**
+     * Entities loaded from the database skip the Transaction constructor, so their amount keeps whatever scale
+     * the driver returned. Normalize here so every response shows 2 decimals, whatever its source.
+     */
+    private static BigDecimal twoDecimals(BigDecimal amount) {
+        return amount.setScale(2, RoundingMode.HALF_UP);
     }
 }
