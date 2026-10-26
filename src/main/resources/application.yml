@@ -5,6 +5,9 @@ spring:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5433}/fraud
     username: ${DB_USER:fraud}
     password: ${DB_PASSWORD:fraud}
+  jackson:
+    deserialization:
+      adjust-dates-to-context-time-zone: false   # keep the request timestamp's own offset (odd hours reads it)
   jpa:
     hibernate:
       ddl-auto: validate
