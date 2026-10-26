@@ -1,0 +1,17 @@
+spring:
+  application:
+    name: fraud-detection
+  datasource:
+    url: jdbc:postgresql://localhost:5432/fraud
+    username: fraud
+    password: fraud
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
