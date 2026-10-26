@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 import com.gopi.fraud.config.FraudProperties;
 import com.gopi.fraud.domain.Decision;
 import com.gopi.fraud.domain.Transaction;
+import com.gopi.fraud.dto.TransactionRequest;
 import com.gopi.fraud.repository.TransactionRepository;
 import com.gopi.fraud.rules.FraudRule;
 import com.gopi.fraud.rules.RuleContext;
@@ -102,7 +103,8 @@ class FraudScoringServiceTest {
 
     private ScoringResult score(FraudRule... rules) {
         return new FraudScoringService(List.of(rules), repository, properties)
-                .score("card-1", new BigDecimal("50.00"), "Shop", "GROCERY", "Austin", 30.27, -97.74, NOW);
+                .score(new TransactionRequest("card-1", new BigDecimal("50.00"), "Shop", "GROCERY", "Austin",
+                        30.27, -97.74, NOW));
     }
 
     private static FraudRule fires(String name, int points) {
