@@ -44,12 +44,15 @@ Don't add Phase 2+ pieces (Kafka, Ollama, metrics stack) until asked. Design Pha
 ## Commands
 
 ```
-mvn test                  # run all tests (required before finishing a task)
-mvn spring-boot:run       # run the app locally
-docker compose up -d      # start local infra (Postgres, etc.)
+mvn test                  # run all tests (required before finishing a task); uses H2, no Docker needed
+docker compose up -d      # start local Postgres 16 (db/user/password: fraud, port 5432)
+mvn spring-boot:run       # run the app against local Postgres (needs the line above first)
+docker compose down       # stop infra (add -v to also wipe the data volume)
 ```
 
-Update this section as the project gains real build/run details (profiles, ports, env vars).
+- Tests run with the `test` profile (`src/test/resources/application-test.yml`): H2 in PostgreSQL mode, same Flyway migrations.
+- Schema is managed by Flyway (`src/main/resources/db/migration`); Hibernate only validates (`ddl-auto: validate`). Change the schema with a new `V<n>__*.sql`, never by editing an applied one.
+- Actuator exposes `health` and `info` at `/actuator`.
 
 ## Working Agreements
 
