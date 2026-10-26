@@ -2,9 +2,9 @@ spring:
   application:
     name: fraud-detection
   datasource:
-    url: jdbc:postgresql://localhost:5432/fraud
-    username: fraud
-    password: fraud
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5433}/fraud
+    username: ${DB_USER:fraud}
+    password: ${DB_PASSWORD:fraud}
   jpa:
     hibernate:
       ddl-auto: validate

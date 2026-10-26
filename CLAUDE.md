@@ -45,10 +45,13 @@ Don't add Phase 2+ pieces (Kafka, Ollama, metrics stack) until asked. Design Pha
 
 ```
 mvn test                  # run all tests (required before finishing a task); uses H2, no Docker needed
-docker compose up -d      # start local Postgres 16 (db/user/password: fraud, port 5432)
+docker compose up -d --wait  # start local Postgres 16 (db/user/password: fraud, host port 5433)
 mvn spring-boot:run       # run the app against local Postgres (needs the line above first)
 docker compose down       # stop infra (add -v to also wipe the data volume)
 ```
+
+- DB settings are overridable via env vars, read by both `docker-compose.yml` and `application.yml`: `DB_HOST` (default `localhost`), `DB_PORT` (`5433`), `DB_USER` (`fraud`), `DB_PASSWORD` (`fraud`). The host port defaults to 5433 to avoid clashing with a local Postgres on 5432. Example: `DB_PORT=5434 docker compose up -d --wait && DB_PORT=5434 mvn spring-boot:run`.
+- `DB_USER`/`DB_PASSWORD` only affect the app; the container's credentials are fixed at `fraud`/`fraud` in the compose file.
 
 - Tests run with the `test` profile (`src/test/resources/application-test.yml`): H2 in PostgreSQL mode, same Flyway migrations.
 - Schema is managed by Flyway (`src/main/resources/db/migration`); Hibernate only validates (`ddl-auto: validate`). Change the schema with a new `V<n>__*.sql`, never by editing an applied one.
