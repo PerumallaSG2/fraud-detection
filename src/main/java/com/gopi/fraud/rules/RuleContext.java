@@ -22,10 +22,4 @@ public record RuleContext(
         double longitude,
         OffsetDateTime timestamp,
         IntFunction<List<Transaction>> recentHistory) {
-
-    /** A context with no card history. */
-    public RuleContext(String cardId, BigDecimal amount, String merchant, String merchantCategory, String city,
-                       double latitude, double longitude, OffsetDateTime timestamp) {
-        this(cardId, amount, merchant, merchantCategory, city, latitude, longitude, timestamp, limit -> List.of());
-    }
 }

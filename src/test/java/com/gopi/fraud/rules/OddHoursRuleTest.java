@@ -80,6 +80,9 @@ class OddHoursRuleTest {
 
     private static RuleContext contextAt(OffsetDateTime timestamp) {
         return new RuleContext("card-1", new BigDecimal("50.00"), "Shop", "GROCERY", "Austin",
-                30.27, -97.74, timestamp);
+                30.27, -97.74, timestamp,
+                limit -> {
+                    throw new AssertionError("this rule must not look up card history");
+                });
     }
 }

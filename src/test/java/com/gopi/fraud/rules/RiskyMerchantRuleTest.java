@@ -62,6 +62,9 @@ class RiskyMerchantRuleTest {
 
     private static RuleContext contextFor(String category) {
         return new RuleContext("card-1", new BigDecimal("50.00"), "Shop", category, "Austin",
-                30.27, -97.74, OffsetDateTime.of(2026, 10, 25, 12, 0, 0, 0, ZoneOffset.UTC));
+                30.27, -97.74, OffsetDateTime.of(2026, 10, 25, 12, 0, 0, 0, ZoneOffset.UTC),
+                limit -> {
+                    throw new AssertionError("this rule must not look up card history");
+                });
     }
 }

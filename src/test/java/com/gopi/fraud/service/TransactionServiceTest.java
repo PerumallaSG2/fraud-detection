@@ -93,6 +93,16 @@ class TransactionServiceTest {
     }
 
     @Test
+    void amountIsAlwaysReturnedWithTwoDecimals() {
+        TransactionRequest oneDecimal = new TransactionRequest("card-1", new BigDecimal("120.5"), "Shop", "GROCERY",
+                "Austin", 30.27, -97.74, NOW);
+        when(scoringService.score(oneDecimal)).thenReturn(new ScoringResult(0, Decision.APPROVE, List.of()));
+        when(repository.save(any(Transaction.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertThat(service.create(oneDecimal).amount().toPlainString()).isEqualTo("120.50");
+    }
+
+    @Test
     void doesNotSaveWhenScoringFails() {
         when(scoringService.score(request)).thenThrow(new IllegalStateException("boom"));
 
