@@ -2,12 +2,11 @@ package com.gopi.fraud.service;
 
 import com.gopi.fraud.config.FraudProperties;
 import com.gopi.fraud.domain.Decision;
+import com.gopi.fraud.dto.TransactionRequest;
 import com.gopi.fraud.repository.TransactionRepository;
 import com.gopi.fraud.rules.FraudRule;
 import com.gopi.fraud.rules.RuleContext;
 import com.gopi.fraud.rules.RuleResult;
-import java.math.BigDecimal;
-import java.time.OffsetDateTime;
 import java.util.List;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -30,12 +29,12 @@ public class FraudScoringService {
      * Runs every rule against the transaction. Call this before saving it, so the transaction does not
      * count toward its own history baseline.
      */
-    public ScoringResult score(String cardId, BigDecimal amount, String merchant, String merchantCategory,
-                               String city, double latitude, double longitude, OffsetDateTime timestamp) {
+    public ScoringResult score(TransactionRequest request) {
         // History is looked up lazily, and BLOCK transactions never count toward a card's baseline.
-        RuleContext ctx = new RuleContext(cardId, amount, merchant, merchantCategory, city, latitude, longitude,
-                timestamp,
-                limit -> repository.findRecentByCardIdExcludingDecision(cardId, Decision.BLOCK,
+        RuleContext ctx = new RuleContext(request.cardId(), request.amount(), request.merchant(),
+                request.merchantCategory(), request.city(), request.latitude(), request.longitude(),
+                request.timestamp(),
+                limit -> repository.findRecentByCardIdExcludingDecision(request.cardId(), Decision.BLOCK,
                         PageRequest.of(0, limit)));
 
         List<RuleResult> triggered = rules.stream()
