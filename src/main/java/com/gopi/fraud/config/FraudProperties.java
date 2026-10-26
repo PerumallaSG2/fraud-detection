@@ -1,5 +1,6 @@
 package com.gopi.fraud.config;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -12,6 +13,7 @@ public class FraudProperties {
 
     private OddHours oddHours = new OddHours();
     private RiskyMerchant riskyMerchant = new RiskyMerchant();
+    private AmountSpike amountSpike = new AmountSpike();
 
     public OddHours getOddHours() {
         return oddHours;
@@ -27,6 +29,67 @@ public class FraudProperties {
 
     public void setRiskyMerchant(RiskyMerchant riskyMerchant) {
         this.riskyMerchant = riskyMerchant;
+    }
+
+    public AmountSpike getAmountSpike() {
+        return amountSpike;
+    }
+
+    public void setAmountSpike(AmountSpike amountSpike) {
+        this.amountSpike = amountSpike;
+    }
+
+    /**
+     * Fires when the amount exceeds {@code multiplier} times the average of the card's last {@code lookback}
+     * non-BLOCK transactions. With fewer than {@code minHistory} of them, it fires above {@code fallbackLimit}.
+     */
+    public static class AmountSpike {
+
+        private int points = 40;
+        private int lookback = 20;
+        private int minHistory = 5;
+        private BigDecimal multiplier = new BigDecimal("3.0");
+        private BigDecimal fallbackLimit = new BigDecimal("5000");
+
+        public int getPoints() {
+            return points;
+        }
+
+        public void setPoints(int points) {
+            this.points = points;
+        }
+
+        public int getLookback() {
+            return lookback;
+        }
+
+        public void setLookback(int lookback) {
+            this.lookback = lookback;
+        }
+
+        public int getMinHistory() {
+            return minHistory;
+        }
+
+        public void setMinHistory(int minHistory) {
+            this.minHistory = minHistory;
+        }
+
+        public BigDecimal getMultiplier() {
+            return multiplier;
+        }
+
+        public void setMultiplier(BigDecimal multiplier) {
+            this.multiplier = multiplier;
+        }
+
+        public BigDecimal getFallbackLimit() {
+            return fallbackLimit;
+        }
+
+        public void setFallbackLimit(BigDecimal fallbackLimit) {
+            this.fallbackLimit = fallbackLimit;
+        }
     }
 
     /** Fires when the local hour is in [startHour, endHour). */
