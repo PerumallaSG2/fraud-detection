@@ -11,6 +11,10 @@ spring:
     open-in-view: false
 
 fraud:
+  max-score: 100
+  thresholds:
+    review: 40              # score < review is APPROVE
+    block: 70               # score > block is BLOCK; review..block inclusive is REVIEW
   amount-spike:
     points: 40
     lookback: 20            # last N non-BLOCK transactions form the baseline

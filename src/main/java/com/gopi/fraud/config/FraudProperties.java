@@ -11,9 +11,27 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "fraud")
 public class FraudProperties {
 
+    private int maxScore = 100;
+    private Thresholds thresholds = new Thresholds();
     private OddHours oddHours = new OddHours();
     private RiskyMerchant riskyMerchant = new RiskyMerchant();
     private AmountSpike amountSpike = new AmountSpike();
+
+    public int getMaxScore() {
+        return maxScore;
+    }
+
+    public void setMaxScore(int maxScore) {
+        this.maxScore = maxScore;
+    }
+
+    public Thresholds getThresholds() {
+        return thresholds;
+    }
+
+    public void setThresholds(Thresholds thresholds) {
+        this.thresholds = thresholds;
+    }
 
     public OddHours getOddHours() {
         return oddHours;
@@ -89,6 +107,29 @@ public class FraudProperties {
 
         public void setFallbackLimit(BigDecimal fallbackLimit) {
             this.fallbackLimit = fallbackLimit;
+        }
+    }
+
+    /** Score below {@code review} is APPROVE, above {@code block} is BLOCK, and anything between (inclusive) is REVIEW. */
+    public static class Thresholds {
+
+        private int review = 40;
+        private int block = 70;
+
+        public int getReview() {
+            return review;
+        }
+
+        public void setReview(int review) {
+            this.review = review;
+        }
+
+        public int getBlock() {
+            return block;
+        }
+
+        public void setBlock(int block) {
+            this.block = block;
         }
     }
 
