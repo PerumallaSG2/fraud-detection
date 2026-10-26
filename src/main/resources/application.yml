@@ -10,6 +10,21 @@ spring:
       ddl-auto: validate
     open-in-view: false
 
+fraud:
+  amount-spike:
+    points: 40
+    lookback: 20            # last N non-BLOCK transactions form the baseline
+    min-history: 5          # below this, fall back to fallback-limit
+    multiplier: 3.0         # fires when amount > multiplier x average
+    fallback-limit: 5000
+  risky-merchant:
+    points: 30
+    categories: [GAMBLING, CRYPTO, WIRE_TRANSFER]
+  odd-hours:
+    points: 20
+    start-hour: 0           # window is [start-hour, end-hour) in the timestamp's own offset
+    end-hour: 5
+
 management:
   endpoints:
     web:
