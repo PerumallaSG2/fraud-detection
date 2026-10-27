@@ -6,7 +6,7 @@ rules that fired into a risk score from 0 to 100, and returns a decision: APPROV
 it) or BLOCK. The score, decision and the rules that fired are stored in PostgreSQL, so every decision can be
 retrieved and explained later.
 
-This is Phase 1: one Spring Boot application with a rules engine and PostgreSQL. There is no Kafka, Redis or ML yet.
+This is Phase 1: one Spring Boot application with a rules engine, PostgreSQL and Redis (for the velocity counter). There is no Kafka or ML yet.
 
 ## Architecture
 
@@ -15,8 +15,9 @@ flowchart LR
     Client -->|POST /api/transactions| Controller
     Controller -->|validated request| TransactionService
     TransactionService -->|1. score| FraudScoringService
-    FraudScoringService --> Rules["FraudRule beans<br/>OddHours, RiskyMerchant, AmountSpike"]
+    FraudScoringService --> Rules["FraudRule beans<br/>OddHours, RiskyMerchant, AmountSpike, Velocity"]
     Rules -.->|lazy card history| Repository
+    Rules -.->|lazy transaction count| Redis[(Redis)]
     TransactionService -->|2. save with rule hits| Repository
     Repository --> Postgres[(PostgreSQL)]
 ```
@@ -35,6 +36,7 @@ Score is the sum of the points of triggered rules, capped at 100.
 | `AMOUNT_SPIKE` | Amount is more than 3.0 x the average of the card's last 20 non-BLOCK transactions. With fewer than 5 such transactions, it triggers above 5000. | 40 |
 | `RISKY_MERCHANT` | Merchant category is GAMBLING, CRYPTO or WIRE_TRANSFER (case-insensitive). | 30 |
 | `ODD_HOURS` | Local hour is in [00:00, 05:00), read in the timestamp's own UTC offset. | 20 |
+| `VELOCITY` | The card has more than 5 transactions in the 60 seconds ending at this transaction's timestamp, counting this one (so the 6th within 60s). Blocked attempts count. If Redis is down the rule does not fire (fails open). | 40 |
 
 | Score | Decision |
 |---|---|
@@ -42,17 +44,19 @@ Score is the sum of the points of triggered rules, capped at 100.
 | 40 to 70 (both inclusive) | REVIEW |
 | above 70 | BLOCK |
 
-Points, thresholds, the score cap, the risky categories, the odd-hours window and the spike parameters are all under
+Points, thresholds, the score cap, the risky categories, the odd-hours window, the spike parameters and the velocity limit and window are all under
 `fraud.*` in `src/main/resources/application.yml`.
 
 ## Tech stack
 
 Java 21, Spring Boot 3.5.6, Maven, Spring Data JPA (Hibernate), Bean Validation, Flyway, PostgreSQL 16,
-Spring Boot Actuator, Docker Compose. Tests use JUnit 5, Mockito, AssertJ and H2.
+Redis 7 (Spring Data Redis, Lettuce), Spring Boot Actuator, Docker Compose. Tests use JUnit 5, Mockito, AssertJ, H2
+and Testcontainers (Redis).
 
 ## How to run
 
-Needs Java 21, Maven and Docker.
+Needs Java 21, Maven and Docker. Redis must be running for velocity to count; without it the app still scores, but
+the velocity rule never fires and a WARN is logged.
 
 ```
 docker compose up -d --wait   # Postgres 16 on host port 5433, Redis 7 on host port 6380
@@ -99,28 +103,33 @@ curl localhost:8080/api/transactions/d24588fd-f85d-44b1-ae64-86d51a6b09ea
 
 Errors share one shape: `{status, error, message, fieldErrors}`, where `fieldErrors` is `[{field, message}]` and is
 empty except for validation errors. Responses never include stack traces. Stop with `docker compose down`
-(add `-v` to delete the data). DB settings can be overridden with `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`.
+(add `-v` to delete the data). DB settings can be overridden with `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, and
+Redis with `REDIS_HOST`, `REDIS_PORT`.
 
 Do not check output by piping curl through `python3 -m json.tool`: it parses numbers as floats and prints `120.5`.
 
 ## Testing
 
-`mvn test` runs 61 tests, all passing at the last run. No Docker is needed.
+`mvn test` runs 85 tests, all passing at the last run (with Docker on, 0 skipped). The Redis tests use Testcontainers,
+so they need Docker; without it they are skipped, not failed, and the rest still run on H2.
 
 | Layer | Tests | Covers |
 |---|---|---|
-| Rules | 20 | Each rule's boundaries, offsets, case-insensitivity, history baseline, BLOCK exclusion |
-| Scoring service | 7 | Point sum, cap at 100, decisions at 39/40/70/71, history lookup excludes BLOCK |
-| Transaction service and mapper | 9 | Scoring happens before save, rule hits, 404, 2-decimal amounts |
+| Rules | 28 | Each rule's boundaries, offsets, case-insensitivity, history baseline, BLOCK exclusion; velocity limit, one count call, empty count |
+| Scoring service | 10 | Point sum, cap at 100, decisions at 39/40/70/71, history lookup excludes BLOCK, velocity count and fail-open on Redis errors |
+| Transaction service and mapper | 10 | Scoring happens before save, same id scored and saved, rule hits, 404, 2-decimal amounts |
 | Repository (`@DataJpaTest`) | 5 | Save/load with rule hits, offset round trip, history query |
+| Velocity counter (`@DataRedisTest`, real Redis) | 9 | Window bounds, transaction timestamps, cards isolated, same id counted once, old entries dropped, TTL |
 | Controller (`@WebMvcTest`) | 12 | 201 and `Location`, 400 cases, 404, 405, 500 without leaked details |
-| End to end (`@SpringBootTest`, real HTTP) | 6 | POST/GET round trip, spike scenario, blocked baseline |
+| End to end (`@SpringBootTest`, real HTTP) | 6 | POST/GET round trip, spike scenario, blocked baseline (velocity mocked) |
+| Velocity end to end (real HTTP and Redis) | 3 | 6th within 60s fires and reviews, timestamp not server time, blocked attempts count |
 | Application context | 2 | Context loads, health endpoint |
 
 Caveat: tests run on H2 in PostgreSQL mode, using the same Flyway migrations. H2 is not PostgreSQL, so a difference
 in types or SQL behavior would not show up in the suite. Against real Postgres I have only run the app by hand:
 it starts with V1 and V2 applied and passes schema validation, and one POST and GET returned correct output. The
-returned offset on GET was not checked there. There are no Testcontainers tests yet.
+returned offset on GET was not checked there. Testcontainers is used for Redis only; there are no tests against real
+PostgreSQL yet.
 
 ## Key design decisions
 
@@ -141,7 +150,7 @@ returned offset on GET was not checked there. There are no Testcontainers tests 
 
 Not built yet:
 
-- Velocity and geo-mismatch rules, with Redis for counters
+- Geo-mismatch rule
 - Client idempotency key, so a retried request is not scored, counted or stored twice
 - Kafka, splitting ingestion and scoring into separate services
 - AI-generated explanations of decisions with Ollama (Bedrock optional)
