@@ -11,6 +11,8 @@ spring:
       port: ${REDIS_PORT:6380}   # 6380 avoids clashing with a local Redis on 6379
       timeout: 200ms             # fail fast: a slow Redis must not stall scoring
       connect-timeout: 200ms
+      repositories:
+        enabled: false
   jackson:
     deserialization:
       adjust-dates-to-context-time-zone: false   # keep the request timestamp's own offset (odd hours reads it)
