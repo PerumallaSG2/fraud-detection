@@ -11,7 +11,7 @@ This is Phase 1: one Spring Boot application with a rules engine, PostgreSQL and
 ## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TD
     Client -->|POST /api/transactions| Controller
     Controller -->|validated request| TransactionService
     TransactionService -->|1. score| FraudScoringService
