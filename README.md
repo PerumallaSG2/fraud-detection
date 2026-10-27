@@ -55,7 +55,7 @@ Spring Boot Actuator, Docker Compose. Tests use JUnit 5, Mockito, AssertJ and H2
 Needs Java 21, Maven and Docker.
 
 ```
-docker compose up -d --wait   # Postgres 16 on host port 5433
+docker compose up -d --wait   # Postgres 16 on host port 5433, Redis 7 on host port 6380
 mvn spring-boot:run           # app on localhost:8080; Flyway creates the schema
 ```
 
