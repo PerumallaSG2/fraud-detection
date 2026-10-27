@@ -29,7 +29,7 @@ class VelocityRuleTest {
 
         assertThat(result.triggered()).isTrue();
         assertThat(result.ruleName()).isEqualTo("VELOCITY");
-        assertThat(result.points()).isEqualTo(30);
+        assertThat(result.points()).isEqualTo(40);
         assertThat(result.reason()).isEqualTo("6 transactions within 60s exceeds the limit of 5");
     }
 

@@ -204,7 +204,7 @@ public class FraudProperties {
      */
     public static class Velocity {
 
-        private int points = 30;
+        private int points = 40;
         private int maxTransactions = 5;
         private Duration window = Duration.ofSeconds(60);
 
