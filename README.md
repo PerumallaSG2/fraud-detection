@@ -142,6 +142,7 @@ returned offset on GET was not checked there. There are no Testcontainers tests 
 Not built yet:
 
 - Velocity and geo-mismatch rules, with Redis for counters
+- Client idempotency key, so a retried request is not scored, counted or stored twice
 - Kafka, splitting ingestion and scoring into separate services
 - AI-generated explanations of decisions with Ollama (Bedrock optional)
 - Testcontainers tests against real PostgreSQL
