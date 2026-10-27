@@ -6,7 +6,7 @@ rules that fired into a risk score from 0 to 100, and returns a decision: APPROV
 it) or BLOCK. The score, decision and the rules that fired are stored in PostgreSQL, so every decision can be
 retrieved and explained later.
 
-This is Phase 1: one Spring Boot application with a rules engine, PostgreSQL and Redis (for the velocity counter). There is no Kafka or ML yet.
+One Spring Boot application with a rules engine, PostgreSQL, and Redis for the velocity counter. There is no Kafka or ML yet.
 
 ## Architecture
 
@@ -106,8 +106,6 @@ empty except for validation errors. Responses never include stack traces. Stop w
 (add `-v` to delete the data). DB settings can be overridden with `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, and
 Redis with `REDIS_HOST`, `REDIS_PORT`.
 
-Do not check output by piping curl through `python3 -m json.tool`: it parses numbers as floats and prints `120.5`.
-
 ## Testing
 
 `mvn test` runs 85 tests, all passing at the last run (with Docker on, 0 skipped). The Redis tests use Testcontainers,
@@ -145,6 +143,13 @@ PostgreSQL yet.
   are always identical.
 - **Flyway owns the schema.** Hibernate only validates. Schema changes are new `V<n>` files; applied ones are never edited.
 - **Thresholds live in one place** (`FraudProperties`, bound from `application.yml`), not in rules or services.
+- **Velocity fails open.** If Redis is down, the velocity rule is skipped with a WARN and the other rules still
+  score, so a cache outage doesn't decline every customer. The health endpoint shows Redis as down.
+- **Velocity counts blocked attempts.** Card testing is many fast attempts that get blocked, so they must count.
+  This is the opposite of the spike baseline, which excludes them.
+- **One id per transaction.** The id is generated before scoring and used as both the Redis entry and the database
+  key. The Redis update runs as one Lua script, so concurrent requests for the same card can't miscount. Known limit:
+  if the save fails after scoring, that attempt stays counted for up to 60 seconds.
 
 ## Roadmap
 
