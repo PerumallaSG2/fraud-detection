@@ -37,6 +37,10 @@ fraud:
     points: 20
     start-hour: 0           # window is [start-hour, end-hour) in the timestamp's own offset
     end-hour: 5
+  velocity:
+    points: 30
+    max-transactions: 5     # fires when the window holds more than this, counting the current transaction
+    window: 60s             # (ts - window, ts], by the transaction's own timestamp
 
 management:
   endpoints:

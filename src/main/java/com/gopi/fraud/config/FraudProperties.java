@@ -1,6 +1,7 @@
 package com.gopi.fraud.config;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -16,6 +17,7 @@ public class FraudProperties {
     private OddHours oddHours = new OddHours();
     private RiskyMerchant riskyMerchant = new RiskyMerchant();
     private AmountSpike amountSpike = new AmountSpike();
+    private Velocity velocity = new Velocity();
 
     public int getMaxScore() {
         return maxScore;
@@ -55,6 +57,14 @@ public class FraudProperties {
 
     public void setAmountSpike(AmountSpike amountSpike) {
         this.amountSpike = amountSpike;
+    }
+
+    public Velocity getVelocity() {
+        return velocity;
+    }
+
+    public void setVelocity(Velocity velocity) {
+        this.velocity = velocity;
     }
 
     /**
@@ -185,6 +195,41 @@ public class FraudProperties {
 
         public void setCategories(List<String> categories) {
             this.categories = categories;
+        }
+    }
+
+    /**
+     * Fires when a card has more than {@code maxTransactions} transactions in the window {@code (ts - window, ts]},
+     * counting the current one and judged by the transaction's own timestamp.
+     */
+    public static class Velocity {
+
+        private int points = 30;
+        private int maxTransactions = 5;
+        private Duration window = Duration.ofSeconds(60);
+
+        public int getPoints() {
+            return points;
+        }
+
+        public void setPoints(int points) {
+            this.points = points;
+        }
+
+        public int getMaxTransactions() {
+            return maxTransactions;
+        }
+
+        public void setMaxTransactions(int maxTransactions) {
+            this.maxTransactions = maxTransactions;
+        }
+
+        public Duration getWindow() {
+            return window;
+        }
+
+        public void setWindow(Duration window) {
+            this.window = window;
         }
     }
 }
