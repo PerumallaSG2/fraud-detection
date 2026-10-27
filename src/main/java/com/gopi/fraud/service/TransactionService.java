@@ -22,12 +22,20 @@ public class TransactionService {
         this.mapper = mapper;
     }
 
-    /** Scores the transaction, then saves it with its rule hits in the same database transaction. */
+    /**
+     * Scores the transaction, then saves it with its rule hits in the same database transaction.
+     *
+     * <p>The id is generated before scoring so scoring can use it as the transaction's key in the velocity counter
+     * (Redis, outside this database transaction), and the saved row has that same id. Known limit: if the save
+     * fails after scoring, the attempt stays counted in Redis, so the card's velocity count is slightly too high
+     * until the window passes.
+     */
     @Transactional
     public TransactionResponse create(TransactionRequest request) {
+        UUID id = UUID.randomUUID();
         // Score first: once saved, the transaction would count toward its own history baseline.
-        ScoringResult scoring = scoringService.score(request);
-        return mapper.toResponse(repository.save(mapper.toEntity(request, scoring)));
+        ScoringResult scoring = scoringService.score(id, request);
+        return mapper.toResponse(repository.save(mapper.toEntity(id, request, scoring)));
     }
 
     @Transactional(readOnly = true)

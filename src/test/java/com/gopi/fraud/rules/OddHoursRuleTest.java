@@ -6,6 +6,7 @@ import com.gopi.fraud.config.FraudProperties;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.OptionalInt;
 import org.junit.jupiter.api.Test;
 
 class OddHoursRuleTest {
@@ -83,6 +84,7 @@ class OddHoursRuleTest {
                 30.27, -97.74, timestamp,
                 limit -> {
                     throw new AssertionError("this rule must not look up card history");
-                });
+                },
+                window -> OptionalInt.of(1));
     }
 }
