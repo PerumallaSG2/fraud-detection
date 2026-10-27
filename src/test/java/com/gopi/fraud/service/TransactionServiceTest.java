@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -47,8 +48,22 @@ class TransactionServiceTest {
         service.create(request);
 
         InOrder order = inOrder(scoringService, repository);
-        order.verify(scoringService).score(request);
+        order.verify(scoringService).score(any(UUID.class), eq(request));
         order.verify(repository).save(any(Transaction.class));
+    }
+
+    @Test
+    void scoresAndSavesUnderTheSameIdGeneratedBeforeScoring() {
+        stubScoring(new ScoringResult(0, Decision.APPROVE, List.of()));
+
+        TransactionResponse response = service.create(request);
+
+        ArgumentCaptor<UUID> scoredId = ArgumentCaptor.forClass(UUID.class);
+        verify(scoringService).score(scoredId.capture(), eq(request));
+        ArgumentCaptor<Transaction> saved = ArgumentCaptor.forClass(Transaction.class);
+        verify(repository).save(saved.capture());
+        assertThat(saved.getValue().getId()).isEqualTo(scoredId.getValue());
+        assertThat(response.id()).isEqualTo(scoredId.getValue());
     }
 
     @Test
@@ -96,7 +111,7 @@ class TransactionServiceTest {
     void amountIsAlwaysReturnedWithTwoDecimals() {
         TransactionRequest oneDecimal = new TransactionRequest("card-1", new BigDecimal("120.5"), "Shop", "GROCERY",
                 "Austin", 30.27, -97.74, NOW);
-        when(scoringService.score(oneDecimal)).thenReturn(new ScoringResult(0, Decision.APPROVE, List.of()));
+        when(scoringService.score(any(UUID.class), eq(oneDecimal))).thenReturn(new ScoringResult(0, Decision.APPROVE, List.of()));
         when(repository.save(any(Transaction.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         assertThat(service.create(oneDecimal).amount().toPlainString()).isEqualTo("120.50");
@@ -104,7 +119,7 @@ class TransactionServiceTest {
 
     @Test
     void doesNotSaveWhenScoringFails() {
-        when(scoringService.score(request)).thenThrow(new IllegalStateException("boom"));
+        when(scoringService.score(any(UUID.class), eq(request))).thenThrow(new IllegalStateException("boom"));
 
         assertThatThrownBy(() -> service.create(request)).isInstanceOf(IllegalStateException.class);
 
@@ -135,7 +150,7 @@ class TransactionServiceTest {
 
     /** Scoring is stubbed; save echoes its argument, as JPA does for a new entity with an assigned id. */
     private void stubScoring(ScoringResult result) {
-        when(scoringService.score(request)).thenReturn(result);
+        when(scoringService.score(any(UUID.class), eq(request))).thenReturn(result);
         when(repository.save(any(Transaction.class))).thenAnswer(invocation -> invocation.getArgument(0));
     }
 }

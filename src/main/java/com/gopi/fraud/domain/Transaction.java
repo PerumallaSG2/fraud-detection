@@ -72,7 +72,15 @@ public class Transaction {
     public Transaction(String cardId, BigDecimal amount, String merchant, String merchantCategory,
                        String city, double latitude, double longitude, OffsetDateTime transactionTime,
                        int riskScore, Decision decision) {
-        this.id = UUID.randomUUID();
+        this(UUID.randomUUID(), cardId, amount, merchant, merchantCategory, city, latitude, longitude,
+                transactionTime, riskScore, decision);
+    }
+
+    /** For a transaction whose id was assigned before it was scored. */
+    public Transaction(UUID id, String cardId, BigDecimal amount, String merchant, String merchantCategory,
+                       String city, double latitude, double longitude, OffsetDateTime transactionTime,
+                       int riskScore, Decision decision) {
+        this.id = id;
         this.cardId = cardId;
         this.amount = amount.setScale(2, RoundingMode.UNNECESSARY);   // NUMERIC(19,2); the API rejects more decimals, so never rounds
         this.merchant = merchant;

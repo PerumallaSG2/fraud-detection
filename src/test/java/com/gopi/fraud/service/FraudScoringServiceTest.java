@@ -12,23 +12,30 @@ import com.gopi.fraud.domain.Decision;
 import com.gopi.fraud.domain.Transaction;
 import com.gopi.fraud.dto.TransactionRequest;
 import com.gopi.fraud.repository.TransactionRepository;
+import com.gopi.fraud.repository.TransactionVelocityRepository;
 import com.gopi.fraud.rules.FraudRule;
 import com.gopi.fraud.rules.RuleContext;
 import com.gopi.fraud.rules.RuleResult;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.OptionalInt;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.redis.RedisConnectionFailureException;
 
 class FraudScoringServiceTest {
 
+    private static final UUID TRANSACTION_ID = UUID.randomUUID();
     private static final OffsetDateTime NOW = OffsetDateTime.of(2026, 10, 25, 12, 0, 0, 0, ZoneOffset.UTC);
 
     private final TransactionRepository repository = mock(TransactionRepository.class);
+    private final TransactionVelocityRepository velocityRepository = mock(TransactionVelocityRepository.class);
     private final FraudProperties properties = new FraudProperties();
 
     @Test
@@ -101,9 +108,49 @@ class FraudScoringServiceTest {
         verifyNoInteractions(repository);
     }
 
+    @Test
+    void transactionCountRecordsUnderTheTransactionIdAndTimestampAndReturnsTheCount() {
+        Duration window = Duration.ofSeconds(60);
+        when(velocityRepository.recordAndCount("card-1", TRANSACTION_ID.toString(), NOW, window)).thenReturn(6);
+        AtomicReference<OptionalInt> seen = new AtomicReference<>();
+
+        score(new Rule("COUNT", ctx -> {
+            seen.set(ctx.recentTransactionCount().apply(window));
+            return RuleResult.notTriggered("COUNT");
+        }));
+
+        verify(velocityRepository).recordAndCount("card-1", TRANSACTION_ID.toString(), NOW, window);
+        assertThat(seen.get()).hasValue(6);
+    }
+
+    @Test
+    void failsOpenWhenTheCounterIsDown() {
+        when(velocityRepository.recordAndCount(any(), any(), any(), any()))
+                .thenThrow(new RedisConnectionFailureException("redis down"));
+        AtomicReference<OptionalInt> seen = new AtomicReference<>();
+
+        ScoringResult result = score(
+                new Rule("COUNT", ctx -> {
+                    seen.set(ctx.recentTransactionCount().apply(Duration.ofSeconds(60)));
+                    return RuleResult.notTriggered("COUNT");
+                }),
+                fires("OTHER", 30));
+
+        assertThat(seen.get()).isEmpty();
+        assertThat(result.score()).isEqualTo(30);
+        assertThat(result.triggeredRules()).extracting(RuleResult::ruleName).containsExactly("OTHER");
+    }
+
+    @Test
+    void doesNotTouchTheCounterUnlessARuleAsksForIt() {
+        score(fires("A", 10));
+
+        verifyNoInteractions(velocityRepository);
+    }
+
     private ScoringResult score(FraudRule... rules) {
-        return new FraudScoringService(List.of(rules), repository, properties)
-                .score(new TransactionRequest("card-1", new BigDecimal("50.00"), "Shop", "GROCERY", "Austin",
+        return new FraudScoringService(List.of(rules), repository, velocityRepository, properties)
+                .score(TRANSACTION_ID, new TransactionRequest("card-1", new BigDecimal("50.00"), "Shop", "GROCERY", "Austin",
                         30.27, -97.74, NOW));
     }
 

@@ -8,6 +8,7 @@ import com.gopi.fraud.dto.ErrorResponse;
 import com.gopi.fraud.dto.TransactionRequest;
 import com.gopi.fraud.dto.TransactionResponse;
 import com.gopi.fraud.dto.TriggeredRuleDto;
+import com.gopi.fraud.repository.TransactionVelocityRepository;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.UUID;
@@ -18,6 +19,7 @@ import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 /** Real beans, real HTTP, H2. Each test uses its own card, so tests don't see each other's history. */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -26,6 +28,10 @@ class TransactionFlowIntegrationTest {
 
     @Autowired
     private TestRestTemplate http;
+
+    /** Keeps this test Docker-free; a real Redis is exercised in the velocity tests. */
+    @MockitoBean
+    private TransactionVelocityRepository velocityRepository;
 
     private final String cardId = "card-" + UUID.randomUUID();
 

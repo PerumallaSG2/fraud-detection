@@ -10,6 +10,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Collections;
 import java.util.List;
+import java.util.OptionalInt;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
@@ -71,7 +72,7 @@ class AmountSpikeRuleTest {
                 30.27, -97.74, NOW, limit -> {
                     requestedLimit.set(limit);
                     return repeated(5, "100.00");
-                });
+                }, window -> OptionalInt.of(1));
         assertThat(requestedLimit).hasValue(0);
 
         rule.evaluate(ctx);
@@ -105,6 +106,6 @@ class AmountSpikeRuleTest {
 
     private static RuleContext contextFor(String amount, List<Transaction> history) {
         return new RuleContext("card-1", new BigDecimal(amount), "Shop", "GROCERY", "Austin",
-                30.27, -97.74, NOW, limit -> history);
+                30.27, -97.74, NOW, limit -> history, window -> OptionalInt.of(1));
     }
 }

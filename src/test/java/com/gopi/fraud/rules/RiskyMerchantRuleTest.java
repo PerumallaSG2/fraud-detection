@@ -7,6 +7,7 @@ import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.OptionalInt;
 import org.junit.jupiter.api.Test;
 
 class RiskyMerchantRuleTest {
@@ -65,6 +66,7 @@ class RiskyMerchantRuleTest {
                 30.27, -97.74, OffsetDateTime.of(2026, 10, 25, 12, 0, 0, 0, ZoneOffset.UTC),
                 limit -> {
                     throw new AssertionError("this rule must not look up card history");
-                });
+                },
+                window -> OptionalInt.of(1));
     }
 }
