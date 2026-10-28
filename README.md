@@ -1,5 +1,7 @@
 # Fraud Detection
 
+[![CI](https://github.com/PerumallaSG2/fraud-detection/actions/workflows/ci.yml/badge.svg)](https://github.com/PerumallaSG2/fraud-detection/actions/workflows/ci.yml)
+
 A REST API that scores card transactions for fraud in real time. A client POSTs a transaction (card, amount,
 merchant, category, location, timestamp). The service runs it through a set of rules, adds up the points of the
 rules that fired into a risk score from 0 to 100, and returns a decision: APPROVE, REVIEW (a person should look at
