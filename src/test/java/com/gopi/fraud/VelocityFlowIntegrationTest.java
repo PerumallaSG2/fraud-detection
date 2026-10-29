@@ -15,6 +15,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.ActiveProfiles;
@@ -23,19 +24,20 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
- * Real HTTP, H2 and a real Redis in a container; skipped when Docker is not available. Each test uses its own
- * card, so tests don't see each other's counts.
+ * Real HTTP, PostgreSQL and Redis, both in containers; needs Docker. Each test uses its own card, so tests don't see
+ * each other's counts.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
-@Testcontainers(disabledWithoutDocker = true)
+@Import(PostgresTestcontainer.class)
+@Testcontainers
 class VelocityFlowIntegrationTest {
 
     private static final OffsetDateTime T0 = OffsetDateTime.parse("2026-10-25T12:00:00Z");
 
     @Container
     @ServiceConnection(name = "redis")
-    static final GenericContainer<?> REDIS = new GenericContainer<>("redis:7").withExposedPorts(6379);
+    static final GenericContainer<?> REDIS = new GenericContainer<>("redis:7-alpine").withExposedPorts(6379);
 
     @Autowired
     private TestRestTemplate http;
