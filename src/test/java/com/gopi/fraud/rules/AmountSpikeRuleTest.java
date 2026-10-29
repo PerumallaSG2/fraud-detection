@@ -11,6 +11,7 @@ import java.time.ZoneOffset;
 import java.util.Collections;
 import java.util.List;
 import java.util.OptionalInt;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
@@ -100,8 +101,8 @@ class AmountSpikeRuleTest {
     }
 
     private static Transaction tx(String amount) {
-        return new Transaction("card-1", new BigDecimal(amount), "Shop", "GROCERY", "Austin",
-                30.27, -97.74, NOW.minusDays(1), 0, Decision.APPROVE);
+        return new Transaction(UUID.randomUUID(), "card-1", new BigDecimal(amount), "Shop", "GROCERY",
+                "Austin", 30.27, -97.74, NOW.minusDays(1), 0, Decision.APPROVE);
     }
 
     private static RuleContext contextFor(String amount, List<Transaction> history) {

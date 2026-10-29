@@ -48,6 +48,13 @@ class FraudScoringServiceTest {
     }
 
     @Test
+    void ordersTriggeredRulesByPointsDescendingThenName() {
+        ScoringResult result = score(fires("A", 20), fires("C", 40), quiet("D"), fires("B", 40));
+
+        assertThat(result.triggeredRules()).extracting(RuleResult::ruleName).containsExactly("B", "C", "A");
+    }
+
+    @Test
     void noTriggeredRulesScoresZeroAndApproves() {
         ScoringResult result = score(quiet("A"), quiet("B"));
 
@@ -87,8 +94,8 @@ class FraudScoringServiceTest {
 
     @Test
     void historyLookupExcludesBlockAndUsesRequestedLimit() {
-        List<Transaction> stored = List.of(new Transaction("card-1", new BigDecimal("10.00"), "Shop", "GROCERY",
-                "Austin", 30.27, -97.74, NOW.minusDays(1), 0, Decision.APPROVE));
+        List<Transaction> stored = List.of(new Transaction(UUID.randomUUID(), "card-1", new BigDecimal("10.00"),
+                "Shop", "GROCERY", "Austin", 30.27, -97.74, NOW.minusDays(1), 0, Decision.APPROVE));
         when(repository.findRecentByCardIdExcludingDecision(any(), any(), any())).thenReturn(stored);
         AtomicReference<List<Transaction>> seen = new AtomicReference<>();
 

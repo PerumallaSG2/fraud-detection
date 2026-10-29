@@ -9,6 +9,7 @@ import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
@@ -35,6 +36,7 @@ class TransactionRepositoryTest {
         Transaction tx = transaction("card-1", "250.00", BASE, 60, Decision.REVIEW);
         tx.addRuleHit(new RuleHit("ODD_HOURS", 20, "Transaction at 02:30"));
         tx.addRuleHit(new RuleHit("RISKY_MERCHANT", 30, "Category GAMBLING is risky"));
+        tx.addRuleHit(new RuleHit("AMOUNT_SPIKE", 30, "Amount is a spike"));
         repository.saveAndFlush(tx);
         entityManager.clear();
 
@@ -48,9 +50,10 @@ class TransactionRepositoryTest {
         assertThat(loaded.getCreatedAt()).isNotNull();
         assertThat(loaded.getRuleHits())
                 .extracting(RuleHit::getRuleName, RuleHit::getPoints)
-                .containsExactlyInAnyOrder(
-                        org.assertj.core.groups.Tuple.tuple("ODD_HOURS", 20),
-                        org.assertj.core.groups.Tuple.tuple("RISKY_MERCHANT", 30));
+                .containsExactly(   // points descending, then name, whatever the insertion order
+                        org.assertj.core.groups.Tuple.tuple("AMOUNT_SPIKE", 30),
+                        org.assertj.core.groups.Tuple.tuple("RISKY_MERCHANT", 30),
+                        org.assertj.core.groups.Tuple.tuple("ODD_HOURS", 20));
     }
 
     @Test
@@ -106,7 +109,7 @@ class TransactionRepositoryTest {
     }
 
     private Transaction transaction(String cardId, String amount, OffsetDateTime time, int score, Decision decision) {
-        return new Transaction(cardId, new BigDecimal(amount), "Shop", "GROCERY", "Austin",
-                30.27, -97.74, time, score, decision);
+        return new Transaction(UUID.randomUUID(), cardId, new BigDecimal(amount), "Shop", "GROCERY",
+                "Austin", 30.27, -97.74, time, score, decision);
     }
 }

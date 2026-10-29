@@ -9,6 +9,7 @@ import com.gopi.fraud.rules.FraudRule;
 import com.gopi.fraud.rules.RuleContext;
 import com.gopi.fraud.rules.RuleResult;
 import java.time.Duration;
+import java.util.Comparator;
 import java.util.List;
 import java.util.OptionalInt;
 import java.util.UUID;
@@ -22,6 +23,10 @@ import org.springframework.stereotype.Service;
 public class FraudScoringService {
 
     private static final Logger log = LoggerFactory.getLogger(FraudScoringService.class);
+
+    /** Stable order for triggered rules, independent of bean order: most points first, ties by rule name. */
+    private static final Comparator<RuleResult> BY_POINTS_THEN_NAME =
+            Comparator.comparingInt(RuleResult::points).reversed().thenComparing(RuleResult::ruleName);
 
     private final List<FraudRule> rules;
     private final TransactionRepository repository;
@@ -53,6 +58,7 @@ public class FraudScoringService {
         List<RuleResult> triggered = rules.stream()
                 .map(rule -> rule.evaluate(ctx))
                 .filter(RuleResult::triggered)
+                .sorted(BY_POINTS_THEN_NAME)
                 .toList();
 
         int total = triggered.stream().mapToInt(RuleResult::points).sum();
