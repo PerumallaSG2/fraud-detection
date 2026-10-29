@@ -53,8 +53,8 @@ Points, thresholds, the score cap, the risky categories, the odd-hours window, t
 ## Tech stack
 
 Java 21, Spring Boot 3.5.6, Maven, Spring Data JPA (Hibernate), Bean Validation, Flyway, PostgreSQL 16,
-Redis 7 (Spring Data Redis, Lettuce), Spring Boot Actuator, Docker Compose. Tests use JUnit 5, Mockito, AssertJ, H2
-and Testcontainers (Redis).
+Redis 7 (Spring Data Redis, Lettuce), Spring Boot Actuator, Docker Compose. Tests use JUnit 5, Mockito, AssertJ
+and Testcontainers (PostgreSQL, Redis).
 
 ## How to run
 
@@ -111,26 +111,26 @@ Redis with `REDIS_HOST`, `REDIS_PORT`.
 
 ## Testing
 
-`mvn test` runs 85 tests, all passing at the last run (with Docker on, 0 skipped). The Redis tests use Testcontainers,
-so they need Docker; without it they are skipped, not failed, and the rest still run on H2.
+`mvn test` runs 98 tests, all passing at the last run (0 skipped). It needs Docker: tests that touch the database run
+against real PostgreSQL 16 (`postgres:16-alpine`, the same image as Docker Compose) and the velocity tests against
+Redis, both through Testcontainers. Without Docker every container test fails rather than skips. Rule, service, mapper and
+controller tests use no containers and take well under a second in total.
 
 | Layer | Tests | Covers |
 |---|---|---|
-| Rules | 28 | Each rule's boundaries, offsets, case-insensitivity, history baseline, BLOCK exclusion; velocity limit, one count call, empty count |
-| Scoring service | 10 | Point sum, cap at 100, decisions at 39/40/70/71, history lookup excludes BLOCK, velocity count and fail-open on Redis errors |
+| Rules | 39 | Each rule's boundaries, offsets, case-insensitivity, history baseline, BLOCK exclusion; velocity limit, one count call, empty count; geo distance, speed limit, out-of-order timestamps |
+| Scoring service | 11 | Point sum, rule order, cap at 100, decisions at 39/40/70/71, history lookup excludes BLOCK, velocity count and fail-open on Redis errors |
 | Transaction service and mapper | 10 | Scoring happens before save, same id scored and saved, rule hits, 404, 2-decimal amounts |
-| Repository (`@DataJpaTest`) | 5 | Save/load with rule hits, offset round trip, history query |
+| Repository (`@DataJpaTest`, real PostgreSQL) | 5 | Save/load with ordered rule hits, offset round trip, history query |
 | Velocity counter (`@DataRedisTest`, real Redis) | 9 | Window bounds, transaction timestamps, cards isolated, same id counted once, old entries dropped, TTL |
 | Controller (`@WebMvcTest`) | 12 | 201 and `Location`, 400 cases, 404, 405, 500 without leaked details |
-| End to end (`@SpringBootTest`, real HTTP) | 6 | POST/GET round trip, spike scenario, blocked baseline (velocity mocked) |
-| Velocity end to end (real HTTP and Redis) | 3 | 6th within 60s fires and reviews, timestamp not server time, blocked attempts count |
+| End to end (`@SpringBootTest`, real HTTP and PostgreSQL) | 7 | POST/GET round trip and rule order, spike scenario, blocked baseline, impossible travel (velocity mocked) |
+| Velocity end to end (real HTTP, PostgreSQL and Redis) | 3 | 6th within 60s fires and reviews, timestamp not server time, blocked attempts count |
 | Application context | 2 | Context loads, health endpoint |
 
-Caveat: tests run on H2 in PostgreSQL mode, using the same Flyway migrations. H2 is not PostgreSQL, so a difference
-in types or SQL behavior would not show up in the suite. Against real Postgres I have only run the app by hand:
-it starts with V1 and V2 applied and passes schema validation, and one POST and GET returned correct output. The
-returned offset on GET was not checked there. Testcontainers is used for Redis only; there are no tests against real
-PostgreSQL yet.
+Every database test runs Flyway's V1 and V2 on a fresh PostgreSQL 16 and Hibernate validates the schema against it,
+so the suite checks the same SQL and types that production uses. Each distinct Spring test context starts its own
+container (4 in a full run).
 
 ## Key design decisions
 

@@ -16,10 +16,10 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-/** Real Redis in a container; skipped when Docker is not available. Each test uses its own card. */
+/** Real Redis in a container; needs Docker and fails without it. Each test uses its own card. */
 @DataRedisTest
 @Import(TransactionVelocityRepository.class)
-@Testcontainers(disabledWithoutDocker = true)
+@Testcontainers
 class TransactionVelocityRepositoryTest {
 
     private static final Duration WINDOW = Duration.ofSeconds(60);
@@ -27,7 +27,7 @@ class TransactionVelocityRepositoryTest {
 
     @Container
     @ServiceConnection(name = "redis")
-    static final GenericContainer<?> REDIS = new GenericContainer<>("redis:7").withExposedPorts(6379);
+    static final GenericContainer<?> REDIS = new GenericContainer<>("redis:7-alpine").withExposedPorts(6379);
 
     @Autowired
     private TransactionVelocityRepository repository;

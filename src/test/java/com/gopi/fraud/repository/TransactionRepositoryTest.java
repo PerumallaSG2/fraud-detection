@@ -2,6 +2,7 @@ package com.gopi.fraud.repository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.gopi.fraud.PostgresTestcontainer;
 import com.gopi.fraud.domain.Decision;
 import com.gopi.fraud.domain.RuleHit;
 import com.gopi.fraud.domain.Transaction;
@@ -15,12 +16,14 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
+import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.test.context.ActiveProfiles;
 
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @ActiveProfiles("test")
+@Import(PostgresTestcontainer.class)
 class TransactionRepositoryTest {
 
     private static final OffsetDateTime BASE = OffsetDateTime.of(2026, 10, 25, 12, 0, 0, 0, ZoneOffset.UTC);

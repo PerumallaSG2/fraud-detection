@@ -17,7 +17,7 @@ class TransactionMapperTest {
 
     /**
      * JPA fills a loaded entity's fields directly and never runs the constructor, so the amount's scale is
-     * whatever the driver returned. Setting the field here reproduces that, which the H2 tests could not.
+     * whatever the driver returned. Setting the field here reproduces that, which a database round trip may not.
      */
     @Test
     void responseAmountHasTwoDecimalsEvenWhenTheLoadedEntityDoesNot() {

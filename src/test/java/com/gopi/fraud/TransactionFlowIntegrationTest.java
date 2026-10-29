@@ -16,20 +16,22 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
-/** Real beans, real HTTP, H2. Each test uses its own card, so tests don't see each other's history. */
+/** Real beans, real HTTP, real PostgreSQL. Each test uses its own card, so tests don't see each other's history. */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
+@Import(PostgresTestcontainer.class)
 class TransactionFlowIntegrationTest {
 
     @Autowired
     private TestRestTemplate http;
 
-    /** Keeps this test Docker-free; a real Redis is exercised in the velocity tests. */
+    /** Keeps this test Redis-free; a real Redis is exercised in the velocity tests. */
     @MockitoBean
     private TransactionVelocityRepository velocityRepository;
 
