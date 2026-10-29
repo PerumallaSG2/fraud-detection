@@ -18,6 +18,7 @@ public class FraudProperties {
     private RiskyMerchant riskyMerchant = new RiskyMerchant();
     private AmountSpike amountSpike = new AmountSpike();
     private Velocity velocity = new Velocity();
+    private GeoMismatch geoMismatch = new GeoMismatch();
 
     public int getMaxScore() {
         return maxScore;
@@ -65,6 +66,14 @@ public class FraudProperties {
 
     public void setVelocity(Velocity velocity) {
         this.velocity = velocity;
+    }
+
+    public GeoMismatch getGeoMismatch() {
+        return geoMismatch;
+    }
+
+    public void setGeoMismatch(GeoMismatch geoMismatch) {
+        this.geoMismatch = geoMismatch;
     }
 
     /**
@@ -117,6 +126,42 @@ public class FraudProperties {
 
         public void setFallbackLimit(BigDecimal fallbackLimit) {
             this.fallbackLimit = fallbackLimit;
+        }
+    }
+
+    /**
+     * "Impossible travel": fires when the speed implied by the distance and time between this transaction and the
+     * card's previous non-BLOCK transaction exceeds {@code maxSpeedKmh}. Distances under {@code minDistanceKm} never
+     * fire.
+     */
+    public static class GeoMismatch {
+
+        private int points = 40;
+        private double maxSpeedKmh = 900;
+        private double minDistanceKm = 50;
+
+        public int getPoints() {
+            return points;
+        }
+
+        public void setPoints(int points) {
+            this.points = points;
+        }
+
+        public double getMaxSpeedKmh() {
+            return maxSpeedKmh;
+        }
+
+        public void setMaxSpeedKmh(double maxSpeedKmh) {
+            this.maxSpeedKmh = maxSpeedKmh;
+        }
+
+        public double getMinDistanceKm() {
+            return minDistanceKm;
+        }
+
+        public void setMinDistanceKm(double minDistanceKm) {
+            this.minDistanceKm = minDistanceKm;
         }
     }
 

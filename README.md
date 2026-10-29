@@ -17,7 +17,7 @@ flowchart TD
     Client -->|POST /api/transactions| Controller
     Controller -->|validated request| TransactionService
     TransactionService -->|1. score| FraudScoringService
-    FraudScoringService --> Rules["FraudRule beans<br/>OddHours, RiskyMerchant, AmountSpike, Velocity"]
+    FraudScoringService --> Rules["FraudRule beans<br/>OddHours, RiskyMerchant, AmountSpike,<br/>Velocity, GeoMismatch"]
     Rules -.->|lazy card history| Repository
     Rules -.->|lazy transaction count| Redis[(Redis)]
     TransactionService -->|2. save with rule hits| Repository
@@ -39,6 +39,7 @@ Score is the sum of the points of triggered rules, capped at 100.
 | `RISKY_MERCHANT` | Merchant category is GAMBLING, CRYPTO or WIRE_TRANSFER (case-insensitive). | 30 |
 | `ODD_HOURS` | Local hour is in [00:00, 05:00), read in the timestamp's own UTC offset. | 20 |
 | `VELOCITY` | The card has more than 5 transactions in the 60 seconds ending at this transaction's timestamp, counting this one (so the 6th within 60s). Blocked attempts count. If Redis is down the rule does not fire (fails open). | 40 |
+| `GEO_MISMATCH` | "Impossible travel": the distance from the card's previous non-BLOCK transaction (haversine), divided by the time between the two transactions' own timestamps, is above 900 km/h. Hops under 50 km never trigger. | 40 |
 
 | Score | Decision |
 |---|---|
@@ -46,7 +47,7 @@ Score is the sum of the points of triggered rules, capped at 100.
 | 40 to 70 (both inclusive) | REVIEW |
 | above 70 | BLOCK |
 
-Points, thresholds, the score cap, the risky categories, the odd-hours window, the spike parameters and the velocity limit and window are all under
+Points, thresholds, the score cap, the risky categories, the odd-hours window, the spike parameters, the velocity limit and window, and the geo-mismatch speed limit and minimum distance are all under
 `fraud.*` in `src/main/resources/application.yml`.
 
 ## Tech stack

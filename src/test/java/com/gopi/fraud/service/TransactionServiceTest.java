@@ -128,8 +128,8 @@ class TransactionServiceTest {
 
     @Test
     void getReturnsStoredTransaction() {
-        Transaction stored = new Transaction("card-1", new BigDecimal("10.00"), "Shop", "GROCERY", "Austin",
-                30.27, -97.74, NOW, 0, Decision.APPROVE);
+        Transaction stored = new Transaction(UUID.randomUUID(), "card-1", new BigDecimal("10.00"), "Shop",
+                "GROCERY", "Austin", 30.27, -97.74, NOW, 0, Decision.APPROVE);
         when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
 
         TransactionResponse response = service.get(stored.getId());

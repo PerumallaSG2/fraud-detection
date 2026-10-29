@@ -43,6 +43,10 @@ fraud:
     points: 40              # alone this reaches the review threshold
     max-transactions: 5     # fires when the window holds more than this, counting the current transaction
     window: 60s             # (ts - window, ts], by the transaction's own timestamp
+  geo-mismatch:
+    points: 40              # alone this reaches the review threshold; with another strong signal, block
+    max-speed-kmh: 900      # fires above this speed between this and the previous non-BLOCK transaction
+    min-distance-km: 50     # shorter hops never fire (GPS noise, neighbouring towns)
 
 management:
   endpoints:

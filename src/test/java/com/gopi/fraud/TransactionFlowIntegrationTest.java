@@ -85,13 +85,12 @@ class TransactionFlowIntegrationTest {
         assertThat(created.getBody().riskScore()).isEqualTo(50);
         assertThat(created.getBody().decision()).isEqualTo(Decision.REVIEW);
         assertThat(created.getBody().triggeredRules()).extracting(TriggeredRuleDto::rule, TriggeredRuleDto::points)
-                .containsExactlyInAnyOrder(tuple("RISKY_MERCHANT", 30), tuple("ODD_HOURS", 20));
+                .containsExactly(tuple("RISKY_MERCHANT", 30), tuple("ODD_HOURS", 20));
 
-        // The stored copy carries the same rule hits.
+        // The stored copy carries the same rule hits, in the same order.
         TransactionResponse stored = http.getForObject(created.getHeaders().getLocation(), TransactionResponse.class);
         assertThat(stored.riskScore()).isEqualTo(50);
-        assertThat(stored.triggeredRules()).extracting(TriggeredRuleDto::rule)
-                .containsExactlyInAnyOrder("RISKY_MERCHANT", "ODD_HOURS");
+        assertThat(stored.triggeredRules()).isEqualTo(created.getBody().triggeredRules());
     }
 
     @Test
@@ -124,6 +123,21 @@ class TransactionFlowIntegrationTest {
     }
 
     @Test
+    void impossibleTravelFiresGeoMismatchAndReviews() {
+        TransactionResponse austin = post("50.00", "GROCERY", "2026-10-25T12:00:00Z").getBody();
+        assertThat(austin.triggeredRules()).isEmpty();
+
+        // London is about 7,900 km from Austin; 30 minutes later is far beyond 900 km/h.
+        TransactionResponse london =
+                post("50.00", "GROCERY", "2026-10-25T12:30:00Z", "London", 51.51, -0.13).getBody();
+
+        assertThat(london.triggeredRules()).extracting(TriggeredRuleDto::rule, TriggeredRuleDto::points)
+                .containsExactly(tuple("GEO_MISMATCH", 40));
+        assertThat(london.riskScore()).isEqualTo(40);
+        assertThat(london.decision()).isEqualTo(Decision.REVIEW);
+    }
+
+    @Test
     void invalidRequestReturns400AndUnknownIdReturns404() {
         ResponseEntity<ErrorResponse> invalid = http.postForEntity("/api/transactions",
                 new TransactionRequest(" ", new BigDecimal("10.00"), "Shop", "GROCERY", "Austin", 30.27, -97.74,
@@ -146,8 +160,13 @@ class TransactionFlowIntegrationTest {
     }
 
     private ResponseEntity<TransactionResponse> post(String amount, String category, String timestamp) {
+        return post(amount, category, timestamp, "Austin", 30.27, -97.74);
+    }
+
+    private ResponseEntity<TransactionResponse> post(String amount, String category, String timestamp,
+                                                     String city, double latitude, double longitude) {
         TransactionRequest request = new TransactionRequest(cardId, new BigDecimal(amount), "Shop", category,
-                "Austin", 30.27, -97.74, OffsetDateTime.parse(timestamp));
+                city, latitude, longitude, OffsetDateTime.parse(timestamp));
         return http.postForEntity("/api/transactions", request, TransactionResponse.class);
     }
 }

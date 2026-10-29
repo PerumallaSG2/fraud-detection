@@ -7,6 +7,7 @@ import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.OneToMany;
+import jakarta.persistence.OrderBy;
 import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -63,20 +64,15 @@ public class Transaction {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
+    /** Same order as scoring produces: points descending, then rule name. */
     @OneToMany(mappedBy = "transaction", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OrderBy("points DESC, ruleName ASC")
     private List<RuleHit> ruleHits = new ArrayList<>();
 
     protected Transaction() {
     }
 
-    public Transaction(String cardId, BigDecimal amount, String merchant, String merchantCategory,
-                       String city, double latitude, double longitude, OffsetDateTime transactionTime,
-                       int riskScore, Decision decision) {
-        this(UUID.randomUUID(), cardId, amount, merchant, merchantCategory, city, latitude, longitude,
-                transactionTime, riskScore, decision);
-    }
-
-    /** For a transaction whose id was assigned before it was scored. */
+    /** The id is assigned by the caller (before scoring, so the velocity counter and the row share it). */
     public Transaction(UUID id, String cardId, BigDecimal amount, String merchant, String merchantCategory,
                        String city, double latitude, double longitude, OffsetDateTime transactionTime,
                        int riskScore, Decision decision) {
