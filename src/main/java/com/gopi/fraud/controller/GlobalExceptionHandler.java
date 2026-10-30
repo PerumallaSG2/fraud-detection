@@ -1,6 +1,8 @@
 package com.gopi.fraud.controller;
 
 import com.gopi.fraud.dto.ErrorResponse;
+import com.gopi.fraud.exception.AlertAlreadyResolvedException;
+import com.gopi.fraud.exception.AlertNotFoundException;
 import com.gopi.fraud.exception.TransactionNotFoundException;
 import java.util.List;
 import org.slf4j.Logger;
@@ -15,6 +17,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
 /**
@@ -26,9 +29,14 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
-    @ExceptionHandler(TransactionNotFoundException.class)
-    ResponseEntity<Object> handleNotFound(TransactionNotFoundException ex) {
+    @ExceptionHandler({TransactionNotFoundException.class, AlertNotFoundException.class})
+    ResponseEntity<Object> handleNotFound(RuntimeException ex) {
         return body(HttpStatus.NOT_FOUND, ex.getMessage(), List.of());
+    }
+
+    @ExceptionHandler(AlertAlreadyResolvedException.class)
+    ResponseEntity<Object> handleAlreadyResolved(AlertAlreadyResolvedException ex) {
+        return body(HttpStatus.CONFLICT, ex.getMessage(), List.of());
     }
 
     @ExceptionHandler(Exception.class)
@@ -42,6 +50,18 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
             HttpHeaders headers, HttpStatusCode status, WebRequest request) {
         List<ErrorResponse.FieldError> fieldErrors = ex.getBindingResult().getFieldErrors().stream()
                 .map(error -> new ErrorResponse.FieldError(error.getField(), error.getDefaultMessage()))
+                .toList();
+        return body(HttpStatus.BAD_REQUEST, "Validation failed", fieldErrors);
+    }
+
+    /** Constraint violations on request parameters, e.g. {@code size} above its maximum. */
+    @Override
+    protected ResponseEntity<Object> handleHandlerMethodValidationException(HandlerMethodValidationException ex,
+            HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+        List<ErrorResponse.FieldError> fieldErrors = ex.getParameterValidationResults().stream()
+                .flatMap(result -> result.getResolvableErrors().stream()
+                        .map(error -> new ErrorResponse.FieldError(result.getMethodParameter().getParameterName(),
+                                error.getDefaultMessage())))
                 .toList();
         return body(HttpStatus.BAD_REQUEST, "Validation failed", fieldErrors);
     }
