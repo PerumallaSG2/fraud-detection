@@ -35,8 +35,9 @@ class TransactionServiceTest {
 
     private final FraudScoringService scoringService = mock(FraudScoringService.class);
     private final TransactionRepository repository = mock(TransactionRepository.class);
+    private final AlertService alertService = mock(AlertService.class);
     private final TransactionService service =
-            new TransactionService(scoringService, repository, new TransactionMapper());
+            new TransactionService(scoringService, repository, new TransactionMapper(), alertService);
 
     private final TransactionRequest request = new TransactionRequest("card-1", new BigDecimal("120.50"), "Casino",
             "GAMBLING", "Austin", 30.27, -97.74, NOW);
@@ -90,6 +91,21 @@ class TransactionServiceTest {
     }
 
     @Test
+    void passesTheSavedTransactionToAlertsAfterSaving() {
+        stubScoring(new ScoringResult(50, Decision.REVIEW, List.of(
+                RuleResult.triggered("RISKY_MERCHANT", 30, "category GAMBLING"),
+                RuleResult.triggered("ODD_HOURS", 20, "hour 2"))));
+
+        TransactionResponse response = service.create(request);
+
+        InOrder order = inOrder(repository, alertService);
+        ArgumentCaptor<Transaction> saved = ArgumentCaptor.forClass(Transaction.class);
+        order.verify(repository).save(saved.capture());
+        order.verify(alertService).openIfFlagged(saved.getValue());
+        assertThat(saved.getValue().getId()).isEqualTo(response.id());
+    }
+
+    @Test
     void returnsResponseBuiltFromTheSavedTransaction() {
         stubScoring(new ScoringResult(30, Decision.APPROVE, List.of(
                 RuleResult.triggered("RISKY_MERCHANT", 30, "category GAMBLING"))));
@@ -124,6 +140,7 @@ class TransactionServiceTest {
         assertThatThrownBy(() -> service.create(request)).isInstanceOf(IllegalStateException.class);
 
         verify(repository, never()).save(any());
+        verify(alertService, never()).openIfFlagged(any());
     }
 
     @Test
