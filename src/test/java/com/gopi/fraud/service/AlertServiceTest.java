@@ -11,7 +11,9 @@ import static org.mockito.Mockito.when;
 
 import com.gopi.fraud.domain.Alert;
 import com.gopi.fraud.domain.AlertStatus;
+import com.gopi.fraud.domain.AlertExplanation;
 import com.gopi.fraud.domain.Decision;
+import com.gopi.fraud.domain.ExplanationSource;
 import com.gopi.fraud.dto.AlertPageResponse;
 import com.gopi.fraud.dto.AlertResolution;
 import com.gopi.fraud.dto.AlertResolveRequest;
@@ -19,6 +21,7 @@ import com.gopi.fraud.dto.AlertResponse;
 import com.gopi.fraud.exception.AlertAlreadyResolvedException;
 import com.gopi.fraud.exception.AlertNotFoundException;
 import com.gopi.fraud.messaging.TransactionDecided;
+import com.gopi.fraud.repository.AlertExplanationRepository;
 import com.gopi.fraud.repository.AlertRepository;
 import java.util.List;
 import java.util.Optional;
@@ -36,7 +39,8 @@ import org.springframework.data.domain.Sort;
 class AlertServiceTest {
 
     private final AlertRepository repository = mock(AlertRepository.class);
-    private final AlertService service = new AlertService(repository, new AlertMapper());
+    private final AlertExplanationRepository explanations = mock(AlertExplanationRepository.class);
+    private final AlertService service = new AlertService(repository, explanations, new AlertMapper());
 
     @Test
     void approveOpensNoAlert() {
@@ -93,6 +97,47 @@ class AlertServiceTest {
         assertThat(page.size()).isEqualTo(20);
         assertThat(page.totalElements()).isEqualTo(41);
         assertThat(page.totalPages()).isEqualTo(3);
+    }
+
+    @Test
+    void listAddsEachAlertsExplanationWithOneLookupForThePage() {
+        Alert explained = alert(50, Decision.REVIEW);
+        Alert notYet = alert(80, Decision.BLOCK);
+        when(repository.findByStatus(eq(AlertStatus.OPEN), any(Pageable.class)))
+                .thenAnswer(invocation -> new PageImpl<>(List.of(explained, notYet), invocation.getArgument(1), 2));
+        when(explanations.findAllById(List.of(explained.getTransactionId(), notYet.getTransactionId())))
+                .thenReturn(List.of(new AlertExplanation(explained.getTransactionId(), "Gambling at 02:30.",
+                        ExplanationSource.OLLAMA, "llama3.2:1b")));
+
+        AlertPageResponse page = service.list(AlertStatus.OPEN, 0, 20);
+
+        assertThat(page.alerts().get(0).explanation().text()).isEqualTo("Gambling at 02:30.");
+        assertThat(page.alerts().get(0).explanation().source()).isEqualTo(ExplanationSource.OLLAMA);
+        assertThat(page.alerts().get(0).explanation().model()).isEqualTo("llama3.2:1b");
+        assertThat(page.alerts().get(1).explanation()).isNull();
+        verify(explanations).findAllById(any());
+    }
+
+    @Test
+    void anEmptyPageLooksUpNoExplanations() {
+        when(repository.findAll(any(Pageable.class))).thenReturn(Page.empty());
+
+        service.list(null, 0, 20);
+
+        verify(explanations, never()).findAllById(any());
+    }
+
+    @Test
+    void resolveReturnsTheAlertWithItsExplanation() {
+        Alert alert = alert(80, Decision.BLOCK);
+        when(repository.findForUpdateById(alert.getId())).thenReturn(Optional.of(alert));
+        when(explanations.findById(alert.getTransactionId())).thenReturn(Optional.of(new AlertExplanation(
+                alert.getTransactionId(), "Flagged for BLOCK (score 80): reasons.", ExplanationSource.RULES, null)));
+
+        AlertResponse response = service.resolve(alert.getId(), new AlertResolveRequest(AlertResolution.FRAUD, null));
+
+        assertThat(response.explanation().source()).isEqualTo(ExplanationSource.RULES);
+        assertThat(response.explanation().model()).isNull();
     }
 
     @Test

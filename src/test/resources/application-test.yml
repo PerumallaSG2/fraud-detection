@@ -9,3 +9,7 @@ fraud:
   messaging:
     retry:
       backoff: 100ms   # keeps the retry and dead-letter tests fast
+  explanations:
+    ollama:
+      base-url: http://localhost:1   # nothing listens: refused at once, rule reasons used (no Ollama in tests)
+      timeout: 300ms                 # AbstractKafkaIntegrationTest points base-url at its Ollama stub
