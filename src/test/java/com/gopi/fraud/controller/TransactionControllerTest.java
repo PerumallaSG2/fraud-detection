@@ -15,6 +15,7 @@ import com.gopi.fraud.domain.Decision;
 import com.gopi.fraud.dto.TransactionRequest;
 import com.gopi.fraud.dto.TransactionResponse;
 import com.gopi.fraud.dto.TriggeredRuleDto;
+import com.gopi.fraud.exception.EventPublishException;
 import com.gopi.fraud.exception.TransactionNotFoundException;
 import com.gopi.fraud.service.TransactionService;
 import java.math.BigDecimal;
@@ -47,32 +48,46 @@ class TransactionControllerTest {
     private TransactionService service;
 
     @Test
-    void postReturns201WithLocationAndBody() throws Exception {
-        when(service.create(any())).thenReturn(response());
+    void postReturns202WithLocationAndPendingBody() throws Exception {
+        when(service.accept(any())).thenReturn(ID);
 
         mockMvc.perform(post("/api/transactions").contentType(MediaType.APPLICATION_JSON).content(VALID_BODY))
-                .andExpect(status().isCreated())
+                .andExpect(status().isAccepted())
                 .andExpect(header().string("Location", "http://localhost/api/transactions/" + ID))
                 .andExpect(jsonPath("$.id").value(ID.toString()))
-                .andExpect(jsonPath("$.riskScore").value(50))
-                .andExpect(jsonPath("$.decision").value("REVIEW"))
-                .andExpect(jsonPath("$.triggeredRules[0].rule").value("RISKY_MERCHANT"))
-                .andExpect(jsonPath("$.triggeredRules[0].points").value(30))
-                .andExpect(jsonPath("$.triggeredRules[0].reason").value("category GAMBLING"));
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andExpect(jsonPath("$.riskScore").doesNotExist());
     }
 
     @Test
     void postKeepsTheTimestampsOwnOffset() throws Exception {
-        when(service.create(any())).thenReturn(response());
+        when(service.accept(any())).thenReturn(ID);
 
         mockMvc.perform(post("/api/transactions").contentType(MediaType.APPLICATION_JSON).content(VALID_BODY))
-                .andExpect(status().isCreated());
+                .andExpect(status().isAccepted());
 
         ArgumentCaptor<TransactionRequest> captor = ArgumentCaptor.forClass(TransactionRequest.class);
-        verify(service).create(captor.capture());
+        verify(service).accept(captor.capture());
         // Odd hours is read in the timestamp's own offset, so it must not be converted to UTC on the way in.
         assertThat(captor.getValue().timestamp().getOffset()).isEqualTo(ZoneOffset.ofHours(-5));
         assertThat(captor.getValue().timestamp().getHour()).isEqualTo(2);
+    }
+
+    @Test
+    void postReturns503WhenKafkaDoesNotAcceptTheTransaction() throws Exception {
+        when(service.accept(any())).thenThrow(
+                new EventPublishException("transactions", new IllegalStateException("kafka-host:9094 unreachable")));
+
+        String body = mockMvc.perform(post("/api/transactions").contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_BODY))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.status").value(503))
+                .andExpect(jsonPath("$.error").value("Service Unavailable"))
+                .andExpect(jsonPath("$.message").value("Transaction could not be accepted, try again"))
+                .andExpect(jsonPath("$.fieldErrors").isEmpty())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(body).doesNotContain("kafka-host", "EventPublishException");
     }
 
     @Test
@@ -106,12 +121,12 @@ class TransactionControllerTest {
 
     @Test
     void postWithOneOrTwoDecimalsInAmountIsAccepted() throws Exception {
-        when(service.create(any())).thenReturn(response());
+        when(service.accept(any())).thenReturn(ID);
 
         for (String amount : new String[] {"120", "120.5", "120.50"}) {
             mockMvc.perform(post("/api/transactions").contentType(MediaType.APPLICATION_JSON)
                             .content(VALID_BODY.replace("120.50", amount)))
-                    .andExpect(status().isCreated());
+                    .andExpect(status().isAccepted());
         }
     }
 

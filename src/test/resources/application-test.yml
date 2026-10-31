@@ -1,5 +1,11 @@
-# The datasource comes from the PostgreSQL Testcontainer (PostgresTestcontainer, via @ServiceConnection).
+# The datasource comes from the PostgreSQL Testcontainer (PostgresTestcontainer, via @ServiceConnection),
+# and Kafka from the Kafka Testcontainer (KafkaTestcontainer).
 management:
   health:
     redis:
       enabled: false   # most tests run without Redis; /actuator/health must not depend on it
+
+fraud:
+  messaging:
+    retry:
+      backoff: 100ms   # keeps the retry and dead-letter tests fast

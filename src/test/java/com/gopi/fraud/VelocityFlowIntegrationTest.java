@@ -1,12 +1,15 @@
 package com.gopi.fraud;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import com.gopi.fraud.domain.Decision;
+import com.gopi.fraud.dto.TransactionAcceptedResponse;
 import com.gopi.fraud.dto.TransactionRequest;
 import com.gopi.fraud.dto.TransactionResponse;
 import com.gopi.fraud.dto.TriggeredRuleDto;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -24,12 +27,13 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
- * Real HTTP, PostgreSQL and Redis, both in containers; needs Docker. Each test uses its own card, so tests don't see
- * each other's counts.
+ * Real HTTP, PostgreSQL, Kafka and Redis, all in containers; needs Docker. Its own context (a real Redis instead of
+ * the shared context's mock), so its own Kafka too. Each test uses its own card, so tests don't see each other's
+ * counts.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
-@Import(PostgresTestcontainer.class)
+@Import({PostgresTestcontainer.class, KafkaTestcontainer.class})
 @Testcontainers
 class VelocityFlowIntegrationTest {
 
@@ -47,30 +51,24 @@ class VelocityFlowIntegrationTest {
     @Test
     void sixthTransactionWithinTheWindowFiresVelocityAndReviews() {
         for (int i = 0; i < 5; i++) {
-            TransactionResponse response = post("10.00", "GROCERY", T0.plusSeconds(i * 10L)).getBody();
+            TransactionResponse response = post("10.00", "GROCERY", T0.plusSeconds(i * 10L));
             assertThat(rulesOf(response)).isEmpty();
             assertThat(response.decision()).isEqualTo(Decision.APPROVE);
         }
 
-        ResponseEntity<TransactionResponse> sixth = post("10.00", "GROCERY", T0.plusSeconds(50));
+        TransactionResponse sixth = post("10.00", "GROCERY", T0.plusSeconds(50));
 
-        assertThat(sixth.getStatusCode()).isEqualTo(HttpStatus.CREATED);
-        TransactionResponse body = sixth.getBody();
-        assertThat(body.triggeredRules()).containsExactly(new TriggeredRuleDto("VELOCITY", 40,
+        assertThat(sixth.triggeredRules()).containsExactly(new TriggeredRuleDto("VELOCITY", 40,
                 "6 transactions within 60s exceeds the limit of 5"));
-        assertThat(body.riskScore()).isEqualTo(40);
-        assertThat(body.decision()).isEqualTo(Decision.REVIEW);
-
-        // The stored copy carries the same rule hit.
-        TransactionResponse stored = http.getForObject(sixth.getHeaders().getLocation(), TransactionResponse.class);
-        assertThat(rulesOf(stored)).containsExactly("VELOCITY");
+        assertThat(sixth.riskScore()).isEqualTo(40);
+        assertThat(sixth.decision()).isEqualTo(Decision.REVIEW);
     }
 
     @Test
     void countsByTheTransactionsOwnTimestampNotServerTime() {
         // Six transactions a minute apart (the window's lower bound is exclusive) never share a window.
         for (int i = 0; i < 6; i++) {
-            assertThat(rulesOf(post("10.00", "GROCERY", T0.plusSeconds(i * 60L)).getBody())).isEmpty();
+            assertThat(rulesOf(post("10.00", "GROCERY", T0.plusSeconds(i * 60L)))).isEmpty();
         }
 
         // Six within a few seconds, far from server time, do.
@@ -78,7 +76,7 @@ class VelocityFlowIntegrationTest {
         for (int i = 0; i < 5; i++) {
             post("10.00", "GROCERY", burst.plusSeconds(i));
         }
-        assertThat(rulesOf(post("10.00", "GROCERY", burst.plusSeconds(5)).getBody())).contains("VELOCITY");
+        assertThat(rulesOf(post("10.00", "GROCERY", burst.plusSeconds(5)))).contains("VELOCITY");
     }
 
     @Test
@@ -86,12 +84,12 @@ class VelocityFlowIntegrationTest {
         // Spike (fallback limit) 40 + risky merchant 30 + odd hours 20 = 90, so each attempt is BLOCKed.
         OffsetDateTime night = OffsetDateTime.parse("2026-10-25T02:00:00Z");
         for (int i = 0; i < 5; i++) {
-            TransactionResponse blocked = post("9000.00", "GAMBLING", night.plusSeconds(i)).getBody();
+            TransactionResponse blocked = post("9000.00", "GAMBLING", night.plusSeconds(i));
             assertThat(blocked.decision()).isEqualTo(Decision.BLOCK);
             assertThat(rulesOf(blocked)).doesNotContain("VELOCITY");
         }
 
-        TransactionResponse sixth = post("9000.00", "GAMBLING", night.plusSeconds(5)).getBody();
+        TransactionResponse sixth = post("9000.00", "GAMBLING", night.plusSeconds(5));
 
         assertThat(rulesOf(sixth)).contains("VELOCITY");
         assertThat(sixth.decision()).isEqualTo(Decision.BLOCK);
@@ -101,9 +99,15 @@ class VelocityFlowIntegrationTest {
         return response.triggeredRules().stream().map(TriggeredRuleDto::rule).toList();
     }
 
-    private ResponseEntity<TransactionResponse> post(String amount, String category, OffsetDateTime timestamp) {
+    /** POSTs (expects 202) and polls GET until the transaction is scored. */
+    private TransactionResponse post(String amount, String category, OffsetDateTime timestamp) {
         TransactionRequest request = new TransactionRequest(cardId, new BigDecimal(amount), "Shop", category,
                 "Austin", 30.27, -97.74, timestamp);
-        return http.postForEntity("/api/transactions", request, TransactionResponse.class);
+        ResponseEntity<TransactionAcceptedResponse> accepted =
+                http.postForEntity("/api/transactions", request, TransactionAcceptedResponse.class);
+        assertThat(accepted.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+        return await().atMost(Duration.ofSeconds(20)).pollInterval(Duration.ofMillis(50)).until(
+                () -> http.getForEntity(accepted.getHeaders().getLocation(), TransactionResponse.class),
+                response -> response.getStatusCode() == HttpStatus.OK).getBody();
     }
 }

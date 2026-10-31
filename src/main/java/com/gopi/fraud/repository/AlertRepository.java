@@ -16,6 +16,8 @@ public interface AlertRepository extends JpaRepository<Alert, UUID> {
 
     Page<Alert> findByStatus(AlertStatus status, Pageable pageable);
 
+    boolean existsByTransactionId(UUID transactionId);
+
     /** Locks the row (SELECT ... FOR UPDATE) so two concurrent resolves can't both see it OPEN. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select a from Alert a where a.id = :id")

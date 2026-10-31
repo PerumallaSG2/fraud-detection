@@ -3,6 +3,7 @@ package com.gopi.fraud.controller;
 import com.gopi.fraud.dto.ErrorResponse;
 import com.gopi.fraud.exception.AlertAlreadyResolvedException;
 import com.gopi.fraud.exception.AlertNotFoundException;
+import com.gopi.fraud.exception.EventPublishException;
 import com.gopi.fraud.exception.TransactionNotFoundException;
 import java.util.List;
 import org.slf4j.Logger;
@@ -37,6 +38,13 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(AlertAlreadyResolvedException.class)
     ResponseEntity<Object> handleAlreadyResolved(AlertAlreadyResolvedException ex) {
         return body(HttpStatus.CONFLICT, ex.getMessage(), List.of());
+    }
+
+    /** Kafka did not store the transaction, so nothing will score it; the client can safely retry. */
+    @ExceptionHandler(EventPublishException.class)
+    ResponseEntity<Object> handlePublishFailure(EventPublishException ex) {
+        log.warn("{}: {}", ex.getMessage(), ex.getCause() == null ? "" : ex.getCause().toString());
+        return body(HttpStatus.SERVICE_UNAVAILABLE, "Transaction could not be accepted, try again", List.of());
     }
 
     @ExceptionHandler(Exception.class)

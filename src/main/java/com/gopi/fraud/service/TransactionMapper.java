@@ -5,6 +5,7 @@ import com.gopi.fraud.domain.Transaction;
 import com.gopi.fraud.dto.TransactionRequest;
 import com.gopi.fraud.dto.TransactionResponse;
 import com.gopi.fraud.dto.TriggeredRuleDto;
+import com.gopi.fraud.messaging.TransactionDecided;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.UUID;
@@ -32,6 +33,11 @@ public class TransactionMapper {
                         .map(hit -> new TriggeredRuleDto(hit.getRuleName(), hit.getPoints(), hit.getReason()))
                         .toList(),
                 transaction.getCreatedAt());
+    }
+
+    public TransactionDecided toDecided(Transaction transaction) {
+        return new TransactionDecided(transaction.getId(), transaction.getCardId(), transaction.getRiskScore(),
+                transaction.getDecision());
     }
 
     /**
