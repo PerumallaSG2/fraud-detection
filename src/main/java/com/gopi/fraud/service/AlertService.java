@@ -3,12 +3,12 @@ package com.gopi.fraud.service;
 import com.gopi.fraud.domain.Alert;
 import com.gopi.fraud.domain.AlertStatus;
 import com.gopi.fraud.domain.Decision;
-import com.gopi.fraud.domain.Transaction;
 import com.gopi.fraud.dto.AlertPageResponse;
 import com.gopi.fraud.dto.AlertResolveRequest;
 import com.gopi.fraud.dto.AlertResponse;
 import com.gopi.fraud.exception.AlertAlreadyResolvedException;
 import com.gopi.fraud.exception.AlertNotFoundException;
+import com.gopi.fraud.messaging.TransactionDecided;
 import com.gopi.fraud.repository.AlertRepository;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -32,14 +32,16 @@ public class AlertService {
     }
 
     /**
-     * Opens an alert for a REVIEW or BLOCK transaction; APPROVE opens none. Joins the caller's database
-     * transaction, so the alert is saved (or rolled back) together with the scored transaction.
+     * Opens an alert for a REVIEW or BLOCK decision; APPROVE opens none. Idempotent, since a decision can be
+     * delivered more than once: a transaction that already has an alert gets no second one. If two deliveries race,
+     * the unique {@code transaction_id} rejects the second, and its retry finds the alert and does nothing.
      */
     @Transactional
-    public void openIfFlagged(Transaction transaction) {
-        if (transaction.getDecision() != Decision.APPROVE) {
-            repository.save(new Alert(transaction));
+    public void openIfFlagged(TransactionDecided decided) {
+        if (decided.decision() == Decision.APPROVE || repository.existsByTransactionId(decided.transactionId())) {
+            return;
         }
+        repository.save(new Alert(decided.transactionId(), decided.cardId(), decided.riskScore(), decided.decision()));
     }
 
     /** One page of alerts, newest first; all statuses when {@code status} is null. */

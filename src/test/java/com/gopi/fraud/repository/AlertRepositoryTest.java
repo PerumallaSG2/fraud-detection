@@ -45,7 +45,7 @@ class AlertRepositoryTest {
     @Test
     void savesAndLoadsAnOpenAlert() {
         Transaction tx = savedTransaction(85, Decision.BLOCK);
-        Alert alert = repository.saveAndFlush(new Alert(tx));
+        Alert alert = repository.saveAndFlush(alertFor(tx));
         entityManager.clear();
 
         Alert loaded = repository.findById(alert.getId()).orElseThrow();
@@ -82,21 +82,34 @@ class AlertRepositoryTest {
     @Test
     void rejectsASecondAlertForTheSameTransaction() {
         Transaction tx = savedTransaction(50, Decision.REVIEW);
-        repository.saveAndFlush(new Alert(tx));
+        repository.saveAndFlush(alertFor(tx));
 
-        assertThatThrownBy(() -> repository.saveAndFlush(new Alert(tx)))
+        assertThatThrownBy(() -> repository.saveAndFlush(alertFor(tx)))
                 .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void knowsWhetherATransactionHasAnAlert() {
+        Transaction flagged = savedTransaction(50, Decision.REVIEW);
+        repository.saveAndFlush(alertFor(flagged));
+
+        assertThat(repository.existsByTransactionId(flagged.getId())).isTrue();
+        assertThat(repository.existsByTransactionId(savedTransaction(50, Decision.REVIEW).getId())).isFalse();
     }
 
     /** Alerts stamp createdAt with the current time; pin it so the order under test doesn't depend on the clock. */
     private Alert openAlertCreatedAt(Instant createdAt) {
-        Alert alert = repository.saveAndFlush(new Alert(savedTransaction(50, Decision.REVIEW)));
+        Alert alert = repository.saveAndFlush(alertFor(savedTransaction(50, Decision.REVIEW)));
         entityManager.getEntityManager()
                 .createNativeQuery("update alerts set created_at = ?1 where id = ?2")
                 .setParameter(1, createdAt)
                 .setParameter(2, alert.getId())
                 .executeUpdate();
         return alert;
+    }
+
+    private static Alert alertFor(Transaction tx) {
+        return new Alert(tx.getId(), tx.getCardId(), tx.getRiskScore(), tx.getDecision());
     }
 
     private Transaction savedTransaction(int score, Decision decision) {

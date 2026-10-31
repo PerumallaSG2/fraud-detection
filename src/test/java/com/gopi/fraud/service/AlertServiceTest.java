@@ -12,16 +12,14 @@ import static org.mockito.Mockito.when;
 import com.gopi.fraud.domain.Alert;
 import com.gopi.fraud.domain.AlertStatus;
 import com.gopi.fraud.domain.Decision;
-import com.gopi.fraud.domain.Transaction;
 import com.gopi.fraud.dto.AlertPageResponse;
 import com.gopi.fraud.dto.AlertResolution;
 import com.gopi.fraud.dto.AlertResolveRequest;
 import com.gopi.fraud.dto.AlertResponse;
 import com.gopi.fraud.exception.AlertAlreadyResolvedException;
 import com.gopi.fraud.exception.AlertNotFoundException;
+import com.gopi.fraud.messaging.TransactionDecided;
 import com.gopi.fraud.repository.AlertRepository;
-import java.math.BigDecimal;
-import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -42,23 +40,23 @@ class AlertServiceTest {
 
     @Test
     void approveOpensNoAlert() {
-        service.openIfFlagged(transaction(10, Decision.APPROVE));
+        service.openIfFlagged(decided(10, Decision.APPROVE));
 
         verify(repository, never()).save(any());
     }
 
     @ParameterizedTest
     @EnumSource(value = Decision.class, names = {"REVIEW", "BLOCK"})
-    void reviewAndBlockOpenAnAlertCopyingTheTransaction(Decision decision) {
-        Transaction transaction = transaction(55, decision);
+    void reviewAndBlockOpenAnAlertCopyingTheDecision(Decision decision) {
+        TransactionDecided decided = decided(55, decision);
 
-        service.openIfFlagged(transaction);
+        service.openIfFlagged(decided);
 
         ArgumentCaptor<Alert> saved = ArgumentCaptor.forClass(Alert.class);
         verify(repository).save(saved.capture());
         Alert alert = saved.getValue();
         assertThat(alert.getId()).isNotNull();
-        assertThat(alert.getTransactionId()).isEqualTo(transaction.getId());
+        assertThat(alert.getTransactionId()).isEqualTo(decided.transactionId());
         assertThat(alert.getCardId()).isEqualTo("card-1");
         assertThat(alert.getRiskScore()).isEqualTo(55);
         assertThat(alert.getDecision()).isEqualTo(decision);
@@ -69,8 +67,18 @@ class AlertServiceTest {
     }
 
     @Test
+    void aRedeliveredDecisionOpensNoSecondAlert() {
+        TransactionDecided decided = decided(55, Decision.REVIEW);
+        when(repository.existsByTransactionId(decided.transactionId())).thenReturn(true);
+
+        service.openIfFlagged(decided);
+
+        verify(repository, never()).save(any());
+    }
+
+    @Test
     void listFiltersByStatusNewestFirst() {
-        Alert alert = new Alert(transaction(50, Decision.REVIEW));
+        Alert alert = alert(50, Decision.REVIEW);
         when(repository.findByStatus(eq(AlertStatus.OPEN), any(Pageable.class)))
                 .thenAnswer(invocation -> new PageImpl<>(List.of(alert), invocation.getArgument(1), 41));
 
@@ -100,7 +108,7 @@ class AlertServiceTest {
 
     @Test
     void resolveMarksAnOpenAlertWithNote() {
-        Alert alert = new Alert(transaction(80, Decision.BLOCK));
+        Alert alert = alert(80, Decision.BLOCK);
         when(repository.findForUpdateById(alert.getId())).thenReturn(Optional.of(alert));
 
         AlertResponse response = service.resolve(alert.getId(),
@@ -124,7 +132,7 @@ class AlertServiceTest {
 
     @Test
     void resolveThrowsWhenAlreadyResolvedAndKeepsTheFirstOutcome() {
-        Alert alert = new Alert(transaction(80, Decision.BLOCK));
+        Alert alert = alert(80, Decision.BLOCK);
         alert.resolve(AlertStatus.FRAUD, "first");
         when(repository.findForUpdateById(alert.getId())).thenReturn(Optional.of(alert));
 
@@ -136,8 +144,11 @@ class AlertServiceTest {
         assertThat(alert.getNote()).isEqualTo("first");
     }
 
-    private static Transaction transaction(int score, Decision decision) {
-        return new Transaction(UUID.randomUUID(), "card-1", new BigDecimal("10.00"), "Shop", "GROCERY", "Austin",
-                30.27, -97.74, OffsetDateTime.parse("2026-10-25T12:00:00Z"), score, decision);
+    private static TransactionDecided decided(int score, Decision decision) {
+        return new TransactionDecided(UUID.randomUUID(), "card-1", score, decision);
+    }
+
+    private static Alert alert(int score, Decision decision) {
+        return new Alert(UUID.randomUUID(), "card-1", score, decision);
     }
 }

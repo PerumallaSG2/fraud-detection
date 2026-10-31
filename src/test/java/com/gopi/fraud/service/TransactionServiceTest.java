@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -15,8 +15,11 @@ import com.gopi.fraud.domain.Decision;
 import com.gopi.fraud.domain.Transaction;
 import com.gopi.fraud.dto.TransactionRequest;
 import com.gopi.fraud.dto.TransactionResponse;
-import com.gopi.fraud.dto.TriggeredRuleDto;
+import com.gopi.fraud.exception.EventPublishException;
 import com.gopi.fraud.exception.TransactionNotFoundException;
+import com.gopi.fraud.messaging.TransactionDecided;
+import com.gopi.fraud.messaging.TransactionEventPublisher;
+import com.gopi.fraud.messaging.TransactionSubmitted;
 import com.gopi.fraud.repository.TransactionRepository;
 import com.gopi.fraud.rules.RuleResult;
 import java.math.BigDecimal;
@@ -28,6 +31,8 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 class TransactionServiceTest {
 
@@ -35,49 +40,59 @@ class TransactionServiceTest {
 
     private final FraudScoringService scoringService = mock(FraudScoringService.class);
     private final TransactionRepository repository = mock(TransactionRepository.class);
-    private final AlertService alertService = mock(AlertService.class);
-    private final TransactionService service =
-            new TransactionService(scoringService, repository, new TransactionMapper(), alertService);
+    private final TransactionEventPublisher publisher = mock(TransactionEventPublisher.class);
+    private final PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
+    private final TransactionService service = new TransactionService(scoringService, repository,
+            new TransactionMapper(), publisher, new TransactionTemplate(transactionManager));
 
     private final TransactionRequest request = new TransactionRequest("card-1", new BigDecimal("120.50"), "Casino",
             "GAMBLING", "Austin", 30.27, -97.74, NOW);
+    private final TransactionSubmitted event = new TransactionSubmitted(UUID.randomUUID(), request);
 
     @Test
-    void scoresBeforeSaving() {
-        stubScoring(new ScoringResult(0, Decision.APPROVE, List.of()));
+    void acceptPublishesTheRequestUnderTheReturnedId() {
+        UUID id = service.accept(request);
 
-        service.create(request);
-
-        InOrder order = inOrder(scoringService, repository);
-        order.verify(scoringService).score(any(UUID.class), eq(request));
-        order.verify(repository).save(any(Transaction.class));
+        verify(publisher).publish(new TransactionSubmitted(id, request));
+        verify(scoringService, never()).score(any(), any());
+        verify(repository, never()).save(any());
     }
 
     @Test
-    void scoresAndSavesUnderTheSameIdGeneratedBeforeScoring() {
-        stubScoring(new ScoringResult(0, Decision.APPROVE, List.of()));
+    void acceptPropagatesAPublishFailure() {
+        doThrow(new EventPublishException("transactions", new RuntimeException("broker down")))
+                .when(publisher).publish(any(TransactionSubmitted.class));
 
-        TransactionResponse response = service.create(request);
-
-        ArgumentCaptor<UUID> scoredId = ArgumentCaptor.forClass(UUID.class);
-        verify(scoringService).score(scoredId.capture(), eq(request));
-        ArgumentCaptor<Transaction> saved = ArgumentCaptor.forClass(Transaction.class);
-        verify(repository).save(saved.capture());
-        assertThat(saved.getValue().getId()).isEqualTo(scoredId.getValue());
-        assertThat(response.id()).isEqualTo(scoredId.getValue());
+        assertThatThrownBy(() -> service.accept(request)).isInstanceOf(EventPublishException.class);
     }
 
     @Test
-    void savesTransactionWithScoreDecisionAndOneHitPerTriggeredRule() {
+    void processScoresSavesUnderTheEventsIdThenPublishesAfterCommit() {
         stubScoring(new ScoringResult(50, Decision.REVIEW, List.of(
                 RuleResult.triggered("RISKY_MERCHANT", 30, "category GAMBLING"),
                 RuleResult.triggered("ODD_HOURS", 20, "hour 2"))));
 
-        service.create(request);
+        service.process(event);
+
+        InOrder order = inOrder(scoringService, repository, transactionManager, publisher);
+        order.verify(scoringService).score(event.id(), request);
+        order.verify(repository).save(any(Transaction.class));
+        order.verify(transactionManager).commit(any());
+        order.verify(publisher).publish(new TransactionDecided(event.id(), "card-1", 50, Decision.REVIEW));
+    }
+
+    @Test
+    void processSavesTransactionWithScoreDecisionAndOneHitPerTriggeredRule() {
+        stubScoring(new ScoringResult(50, Decision.REVIEW, List.of(
+                RuleResult.triggered("RISKY_MERCHANT", 30, "category GAMBLING"),
+                RuleResult.triggered("ODD_HOURS", 20, "hour 2"))));
+
+        service.process(event);
 
         ArgumentCaptor<Transaction> saved = ArgumentCaptor.forClass(Transaction.class);
         verify(repository).save(saved.capture());
         Transaction transaction = saved.getValue();
+        assertThat(transaction.getId()).isEqualTo(event.id());
         assertThat(transaction.getCardId()).isEqualTo("card-1");
         assertThat(transaction.getAmount()).isEqualByComparingTo("120.50");
         assertThat(transaction.getTransactionTime()).isEqualTo(NOW);
@@ -91,67 +106,51 @@ class TransactionServiceTest {
     }
 
     @Test
-    void passesTheSavedTransactionToAlertsAfterSaving() {
-        stubScoring(new ScoringResult(50, Decision.REVIEW, List.of(
-                RuleResult.triggered("RISKY_MERCHANT", 30, "category GAMBLING"),
-                RuleResult.triggered("ODD_HOURS", 20, "hour 2"))));
+    void processOfAnAlreadySavedIdDoesNotScoreOrSaveButPublishesAgain() {
+        Transaction stored = new Transaction(event.id(), "card-1", new BigDecimal("120.50"), "Casino", "GAMBLING",
+                "Austin", 30.27, -97.74, NOW, 50, Decision.REVIEW);
+        when(repository.findById(event.id())).thenReturn(Optional.of(stored));
 
-        TransactionResponse response = service.create(request);
+        service.process(event);
 
-        InOrder order = inOrder(repository, alertService);
-        ArgumentCaptor<Transaction> saved = ArgumentCaptor.forClass(Transaction.class);
-        order.verify(repository).save(saved.capture());
-        order.verify(alertService).openIfFlagged(saved.getValue());
-        assertThat(saved.getValue().getId()).isEqualTo(response.id());
+        verify(scoringService, never()).score(any(), any());
+        verify(repository, never()).save(any());
+        verify(publisher).publish(new TransactionDecided(event.id(), "card-1", 50, Decision.REVIEW));
     }
 
     @Test
-    void returnsResponseBuiltFromTheSavedTransaction() {
-        stubScoring(new ScoringResult(30, Decision.APPROVE, List.of(
-                RuleResult.triggered("RISKY_MERCHANT", 30, "category GAMBLING"))));
+    void processSavesAndPublishesNothingWhenScoringFails() {
+        when(repository.findById(event.id())).thenReturn(Optional.empty());
+        when(scoringService.score(event.id(), request)).thenThrow(new IllegalStateException("boom"));
 
-        TransactionResponse response = service.create(request);
-
-        assertThat(response.id()).isNotNull();
-        assertThat(response.cardId()).isEqualTo("card-1");
-        assertThat(response.merchantCategory()).isEqualTo("GAMBLING");
-        assertThat(response.timestamp()).isEqualTo(NOW);
-        assertThat(response.riskScore()).isEqualTo(30);
-        assertThat(response.decision()).isEqualTo(Decision.APPROVE);
-        assertThat(response.triggeredRules())
-                .containsExactly(new TriggeredRuleDto("RISKY_MERCHANT", 30, "category GAMBLING"));
-        assertThat(response.createdAt()).isNotNull();
-    }
-
-    @Test
-    void amountIsAlwaysReturnedWithTwoDecimals() {
-        TransactionRequest oneDecimal = new TransactionRequest("card-1", new BigDecimal("120.5"), "Shop", "GROCERY",
-                "Austin", 30.27, -97.74, NOW);
-        when(scoringService.score(any(UUID.class), eq(oneDecimal))).thenReturn(new ScoringResult(0, Decision.APPROVE, List.of()));
-        when(repository.save(any(Transaction.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        assertThat(service.create(oneDecimal).amount().toPlainString()).isEqualTo("120.50");
-    }
-
-    @Test
-    void doesNotSaveWhenScoringFails() {
-        when(scoringService.score(any(UUID.class), eq(request))).thenThrow(new IllegalStateException("boom"));
-
-        assertThatThrownBy(() -> service.create(request)).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> service.process(event)).isInstanceOf(IllegalStateException.class);
 
         verify(repository, never()).save(any());
-        verify(alertService, never()).openIfFlagged(any());
+        verify(publisher, never()).publish(any(TransactionDecided.class));
+        verify(transactionManager).rollback(any());
     }
 
     @Test
-    void getReturnsStoredTransaction() {
-        Transaction stored = new Transaction(UUID.randomUUID(), "card-1", new BigDecimal("10.00"), "Shop",
+    void processPropagatesAPublishFailureSoTheMessageIsRedelivered() {
+        stubScoring(new ScoringResult(0, Decision.APPROVE, List.of()));
+        doThrow(new EventPublishException("decisions", new RuntimeException("broker down")))
+                .when(publisher).publish(any(TransactionDecided.class));
+
+        assertThatThrownBy(() -> service.process(event)).isInstanceOf(EventPublishException.class);
+
+        verify(transactionManager).commit(any());
+    }
+
+    @Test
+    void getReturnsStoredTransactionWithTwoDecimals() {
+        Transaction stored = new Transaction(UUID.randomUUID(), "card-1", new BigDecimal("10.5"), "Shop",
                 "GROCERY", "Austin", 30.27, -97.74, NOW, 0, Decision.APPROVE);
         when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
 
         TransactionResponse response = service.get(stored.getId());
 
         assertThat(response.id()).isEqualTo(stored.getId());
+        assertThat(response.amount().toPlainString()).isEqualTo("10.50");
         assertThat(response.triggeredRules()).isEmpty();
     }
 
@@ -165,9 +164,10 @@ class TransactionServiceTest {
                 .hasMessageContaining(id.toString());
     }
 
-    /** Scoring is stubbed; save echoes its argument, as JPA does for a new entity with an assigned id. */
+    /** Not saved yet; scoring is stubbed; save echoes its argument, as JPA does for a new entity with an assigned id. */
     private void stubScoring(ScoringResult result) {
-        when(scoringService.score(any(UUID.class), eq(request))).thenReturn(result);
+        when(repository.findById(event.id())).thenReturn(Optional.empty());
+        when(scoringService.score(event.id(), request)).thenReturn(result);
         when(repository.save(any(Transaction.class))).thenAnswer(invocation -> invocation.getArgument(0));
     }
 }

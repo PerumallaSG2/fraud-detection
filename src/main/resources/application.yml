@@ -13,6 +13,18 @@ spring:
       connect-timeout: 200ms
       repositories:
         enabled: false
+  kafka:
+    bootstrap-servers: ${KAFKA_HOST:localhost}:${KAFKA_PORT:9094}   # 9094 avoids clashing with a local Kafka on 9092
+    producer:
+      acks: all                       # with the default idempotent producer: no loss, no reordering on retry
+      properties:
+        max.block.ms: 2000            # fail fast when the broker is unreachable: POST returns 503, not a hang
+        request.timeout.ms: 2000
+        delivery.timeout.ms: 3000     # must be >= linger.ms + request.timeout.ms
+    consumer:
+      auto-offset-reset: earliest     # a new consumer group starts from the beginning, so nothing accepted is skipped
+    listener:
+      concurrency: 3                  # one thread per partition (fraud.messaging.partitions)
   jackson:
     deserialization:
       adjust-dates-to-context-time-zone: false   # keep the request timestamp's own offset (odd hours reads it)
@@ -22,6 +34,12 @@ spring:
     open-in-view: false
 
 fraud:
+  messaging:
+    partitions: 3           # per topic; changing it later re-maps cards to partitions (breaks per-card order once)
+    send-timeout: 5s        # publish waits this long for the broker's ack
+    retry:
+      max-attempts: 3       # total, first included; then the record goes to <topic>.DLT
+      backoff: 1s           # the record's partition waits too, which keeps each card in order
   max-score: 100
   thresholds:
     review: 40              # score < review is APPROVE

@@ -45,13 +45,13 @@ public class Alert {
     protected Alert() {
     }
 
-    /** An OPEN alert for the transaction, copying the fields an analyst needs to triage it. */
-    public Alert(Transaction transaction) {
+    /** An OPEN alert for the transaction, with the fields an analyst needs to triage it copied from its decision. */
+    public Alert(UUID transactionId, String cardId, int riskScore, Decision decision) {
         this.id = UUID.randomUUID();
-        this.transactionId = transaction.getId();
-        this.cardId = transaction.getCardId();
-        this.riskScore = transaction.getRiskScore();
-        this.decision = transaction.getDecision();
+        this.transactionId = transactionId;
+        this.cardId = cardId;
+        this.riskScore = riskScore;
+        this.decision = decision;
         this.status = AlertStatus.OPEN;
         this.createdAt = Instant.now();
     }

@@ -1,5 +1,6 @@
 package com.gopi.fraud.controller;
 
+import com.gopi.fraud.dto.TransactionAcceptedResponse;
 import com.gopi.fraud.dto.TransactionRequest;
 import com.gopi.fraud.dto.TransactionResponse;
 import com.gopi.fraud.service.TransactionService;
@@ -25,14 +26,16 @@ public class TransactionController {
         this.service = service;
     }
 
+    /** 202: queued for scoring. Poll the Location: 404 until the transaction is scored, then 200 with the decision. */
     @PostMapping
-    public ResponseEntity<TransactionResponse> create(@Valid @RequestBody TransactionRequest request) {
-        TransactionResponse response = service.create(request);
+    public ResponseEntity<TransactionAcceptedResponse> create(@Valid @RequestBody TransactionRequest request) {
+        UUID id = service.accept(request);
         URI location = ServletUriComponentsBuilder.fromCurrentRequest()
-                .path("/{id}").buildAndExpand(response.id()).toUri();
-        return ResponseEntity.created(location).body(response);
+                .path("/{id}").buildAndExpand(id).toUri();
+        return ResponseEntity.accepted().location(location).body(TransactionAcceptedResponse.pending(id));
     }
 
+    /** 404 for an unknown id, and also for one that is accepted but not scored yet. */
     @GetMapping("/{id}")
     public TransactionResponse get(@PathVariable UUID id) {
         return service.get(id);

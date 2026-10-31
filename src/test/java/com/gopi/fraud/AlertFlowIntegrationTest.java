@@ -1,6 +1,7 @@
 package com.gopi.fraud;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import com.gopi.fraud.domain.AlertStatus;
 import com.gopi.fraud.domain.Decision;
@@ -9,38 +10,25 @@ import com.gopi.fraud.dto.AlertResponse;
 import com.gopi.fraud.dto.ErrorResponse;
 import com.gopi.fraud.dto.TransactionRequest;
 import com.gopi.fraud.dto.TransactionResponse;
-import com.gopi.fraud.repository.TransactionVelocityRepository;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.client.TestRestTemplate;
-import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
-/** Real beans, real HTTP, real PostgreSQL. The database is shared, so tests look up alerts by their own ids. */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@ActiveProfiles("test")
-@Import(PostgresTestcontainer.class)
-class AlertFlowIntegrationTest {
-
-    @Autowired
-    private TestRestTemplate http;
-
-    /** Keeps this test Redis-free; a real Redis is exercised in the velocity tests. */
-    @MockitoBean
-    private TransactionVelocityRepository velocityRepository;
+/**
+ * POST, scoring, the decisions topic, then the alert. The database is shared, so tests look up alerts by their own
+ * ids. Alerts are opened by their own consumer, shortly after the transaction is scored, so tests wait for them.
+ */
+class AlertFlowIntegrationTest extends AbstractKafkaIntegrationTest {
 
     private final String cardId = "card-" + UUID.randomUUID();
 
@@ -49,7 +37,7 @@ class AlertFlowIntegrationTest {
         TransactionResponse tx = post("120.50", "GAMBLING", "2026-10-25T02:30:00-05:00");   // 50: REVIEW
         assertThat(tx.decision()).isEqualTo(Decision.REVIEW);
 
-        AlertResponse open = openAlertFor(tx.id()).orElseThrow();
+        AlertResponse open = awaitOpenAlertFor(tx.id());
         assertThat(open.cardId()).isEqualTo(cardId);
         assertThat(open.riskScore()).isEqualTo(50);
         assertThat(open.decision()).isEqualTo(Decision.REVIEW);
@@ -74,24 +62,29 @@ class AlertFlowIntegrationTest {
         TransactionResponse tx = post("9000.00", "GAMBLING", "2026-10-25T02:30:00-05:00");
         assertThat(tx.decision()).isEqualTo(Decision.BLOCK);
 
-        assertThat(openAlertFor(tx.id())).hasValueSatisfying(alert -> {
-            assertThat(alert.decision()).isEqualTo(Decision.BLOCK);
-            assertThat(alert.riskScore()).isEqualTo(90);
-        });
+        AlertResponse alert = awaitOpenAlertFor(tx.id());
+        assertThat(alert.decision()).isEqualTo(Decision.BLOCK);
+        assertThat(alert.riskScore()).isEqualTo(90);
     }
 
     @Test
     void approveOpensNoAlert() {
-        TransactionResponse tx = post("20.00", "GROCERY", "2026-10-25T12:00:00Z");
-        assertThat(tx.decision()).isEqualTo(Decision.APPROVE);
+        TransactionResponse approved = post("20.00", "GROCERY", "2026-10-25T12:00:00Z");
+        assertThat(approved.decision()).isEqualTo(Decision.APPROVE);
 
-        assertThat(openAlertFor(tx.id())).isEmpty();
+        // Decisions for one card are consumed in order: once this later REVIEW has its alert, the APPROVE before it
+        // has been handled too, so a missing alert is not just a slow one.
+        TransactionResponse flagged = post("120.50", "GAMBLING", "2026-10-26T02:30:00-05:00");
+        awaitOpenAlertFor(flagged.id());
+
+        assertThat(openAlertFor(approved.id())).isEmpty();
     }
 
     @Test
     void openAlertsAreListedNewestFirst() {
         UUID first = post("120.50", "GAMBLING", "2026-10-25T02:30:00-05:00").id();
         UUID second = post("120.50", "GAMBLING", "2026-10-26T02:30:00-05:00").id();
+        awaitOpenAlertFor(second);   // same card, so the first one's alert is opened before it
 
         List<UUID> transactionIds = openAlerts().alerts().stream().map(AlertResponse::transactionId).toList();
 
@@ -103,6 +96,11 @@ class AlertFlowIntegrationTest {
         ResponseEntity<ErrorResponse> missing = patch(UUID.randomUUID(), "FRAUD", null, ErrorResponse.class);
 
         assertThat(missing.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    private AlertResponse awaitOpenAlertFor(UUID transactionId) {
+        return await().atMost(SCORED_WITHIN).pollInterval(Duration.ofMillis(50))
+                .until(() -> openAlertFor(transactionId), Optional::isPresent).orElseThrow();
     }
 
     private Optional<AlertResponse> openAlertFor(UUID transactionId) {
@@ -127,11 +125,7 @@ class AlertFlowIntegrationTest {
     }
 
     private TransactionResponse post(String amount, String category, String timestamp) {
-        TransactionRequest request = new TransactionRequest(cardId, new BigDecimal(amount), "Shop", category,
-                "Austin", 30.27, -97.74, OffsetDateTime.parse(timestamp));
-        ResponseEntity<TransactionResponse> created =
-                http.postForEntity("/api/transactions", request, TransactionResponse.class);
-        assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
-        return created.getBody();
+        return submitAndAwait(new TransactionRequest(cardId, new BigDecimal(amount), "Shop", category, "Austin",
+                30.27, -97.74, OffsetDateTime.parse(timestamp)));
     }
 }
