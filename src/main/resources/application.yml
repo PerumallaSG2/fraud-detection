@@ -40,6 +40,18 @@ fraud:
     retry:
       max-attempts: 3       # total, first included; then the record goes to <topic>.DLT
       backoff: 1s           # the record's partition waits too, which keeps each card in order
+  explanations:             # REVIEW/BLOCK only, written off the scoring path; falls back to the rule reasons
+    ollama:                 # default provider (any profile but "bedrock")
+      base-url: ${OLLAMA_URL:http://localhost:11434}
+      model: llama3.2:1b
+      connect-timeout: 500ms  # Ollama not running: refused at once, rule reasons used
+      timeout: 5s           # the first call after Ollama starts loads the model and may take longer
+      max-tokens: 160
+    bedrock:                # profile "bedrock"; any Converse model or inference profile id works
+      model-id: ${BEDROCK_MODEL_ID:global.anthropic.claude-haiku-5-5}   # Claude Haiku 5.5, global cross-Region profile
+      region: ${AWS_REGION:us-east-1}
+      timeout: 10s
+      max-tokens: 1024      # reasoning tokens can count toward it; the length cap is the prompt and ExplanationText
   max-score: 100
   thresholds:
     review: 40              # score < review is APPROVE

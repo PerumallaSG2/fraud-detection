@@ -17,13 +17,15 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 /**
- * Real beans, real HTTP, PostgreSQL and Kafka in containers. Subclasses share one Spring context (same
- * configuration and the same mocks), so one Kafka and one PostgreSQL serve them all. Scoring is asynchronous:
- * a POST returns 202 and the transaction shows up on GET once scored.
+ * Real beans, real HTTP, PostgreSQL and Kafka in containers, and a stub of Ollama's HTTP API. Subclasses share one
+ * Spring context (same configuration and the same mocks), so one Kafka and one PostgreSQL serve them all. Scoring is
+ * asynchronous: a POST returns 202 and the transaction shows up on GET once scored.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
@@ -31,6 +33,14 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 public abstract class AbstractKafkaIntegrationTest {
 
     protected static final Duration SCORED_WITHIN = Duration.ofSeconds(20);
+
+    /** Stands in for Ollama for every subclass (one stub, so one shared context). Reset it after changing it. */
+    protected static final StubHttpServer OLLAMA = StubHttpServer.start();
+
+    @DynamicPropertySource
+    static void ollama(DynamicPropertyRegistry registry) {
+        registry.add("fraud.explanations.ollama.base-url", OLLAMA::url);
+    }
 
     @Autowired
     protected TestRestTemplate http;

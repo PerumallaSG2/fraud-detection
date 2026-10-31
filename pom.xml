@@ -21,7 +21,21 @@
         <java.version>21</java.version>
         <!-- Overrides the Spring Boot BOM (1.21.3): 1.21.3 cannot talk to Docker Engine 29 (API 1.44 minimum) -->
         <testcontainers.version>1.21.4</testcontainers.version>
+        <!-- Not managed by Spring Boot; only the Bedrock explanation provider (profile "bedrock") uses it -->
+        <aws-sdk.version>2.57.8</aws-sdk.version>
     </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>software.amazon.awssdk</groupId>
+                <artifactId>bom</artifactId>
+                <version>${aws-sdk.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <dependency>
@@ -47,6 +61,17 @@
         <dependency>
             <groupId>org.springframework.kafka</groupId>
             <artifactId>spring-kafka</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>bedrockruntime</artifactId>
+            <exclusions>
+                <!-- async client only; the sync client uses the Apache HTTP client -->
+                <exclusion>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>netty-nio-client</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.flywaydb</groupId>

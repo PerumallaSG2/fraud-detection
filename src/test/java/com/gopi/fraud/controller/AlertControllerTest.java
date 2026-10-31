@@ -1,5 +1,6 @@
 package com.gopi.fraud.controller;
 
+import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
@@ -12,6 +13,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.gopi.fraud.domain.AlertStatus;
 import com.gopi.fraud.domain.Decision;
+import com.gopi.fraud.domain.ExplanationSource;
+import com.gopi.fraud.dto.AlertExplanationResponse;
 import com.gopi.fraud.dto.AlertPageResponse;
 import com.gopi.fraud.dto.AlertResolution;
 import com.gopi.fraud.dto.AlertResolveRequest;
@@ -58,6 +61,22 @@ class AlertControllerTest {
                 .andExpect(jsonPath("$.size").value(5))
                 .andExpect(jsonPath("$.totalElements").value(6))
                 .andExpect(jsonPath("$.totalPages").value(2));
+    }
+
+    @Test
+    void listIncludesTheExplanationOrNullWhenThereIsNone() throws Exception {
+        AlertExplanationResponse explanation = new AlertExplanationResponse("Gambling merchant at 02:30 local time.",
+                ExplanationSource.OLLAMA, "llama3.2:1b", Instant.parse("2026-10-25T07:30:02Z"));
+        when(service.list(null, 0, 20)).thenReturn(new AlertPageResponse(
+                List.of(alert(AlertStatus.OPEN, null, explanation), alert(AlertStatus.OPEN, null)), 0, 20, 2, 1));
+
+        mockMvc.perform(get("/api/alerts"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.alerts[0].explanation.text").value("Gambling merchant at 02:30 local time."))
+                .andExpect(jsonPath("$.alerts[0].explanation.source").value("OLLAMA"))
+                .andExpect(jsonPath("$.alerts[0].explanation.model").value("llama3.2:1b"))
+                .andExpect(jsonPath("$.alerts[0].explanation.createdAt").value("2026-10-25T07:30:02Z"))
+                .andExpect(jsonPath("$.alerts[1].explanation").value(nullValue()));
     }
 
     @Test
@@ -166,8 +185,12 @@ class AlertControllerTest {
     }
 
     private static AlertResponse alert(AlertStatus status, String note) {
+        return alert(status, note, null);
+    }
+
+    private static AlertResponse alert(AlertStatus status, String note, AlertExplanationResponse explanation) {
         return new AlertResponse(ID, TX_ID, "card-1", 50, Decision.REVIEW, status, note,
                 Instant.parse("2026-10-25T07:30:01Z"),
-                status == AlertStatus.OPEN ? null : Instant.parse("2026-10-25T08:00:00Z"));
+                status == AlertStatus.OPEN ? null : Instant.parse("2026-10-25T08:00:00Z"), explanation);
     }
 }
