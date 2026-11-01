@@ -11,6 +11,7 @@ import com.gopi.fraud.explanation.ExplanationProvider;
 import com.gopi.fraud.explanation.ExplanationText;
 import com.gopi.fraud.explanation.RuleReasonsExplainer;
 import com.gopi.fraud.messaging.TransactionDecided;
+import com.gopi.fraud.metrics.FraudMetrics;
 import com.gopi.fraud.repository.AlertExplanationRepository;
 import com.gopi.fraud.repository.TransactionRepository;
 import java.util.Optional;
@@ -37,16 +38,18 @@ public class ExplanationService {
     private final ExplanationPromptBuilder prompts;
     private final ExplanationProvider provider;
     private final TransactionTemplate readOnly;
+    private final FraudMetrics metrics;
 
     public ExplanationService(AlertExplanationRepository explanations, TransactionRepository transactions,
                               ExplanationPromptBuilder prompts, ExplanationProvider provider,
-                              PlatformTransactionManager transactionManager) {
+                              PlatformTransactionManager transactionManager, FraudMetrics metrics) {
         this.explanations = explanations;
         this.transactions = transactions;
         this.prompts = prompts;
         this.provider = provider;
         this.readOnly = new TransactionTemplate(transactionManager);
         this.readOnly.setReadOnly(true);
+        this.metrics = metrics;
     }
 
     /**
@@ -64,8 +67,10 @@ public class ExplanationService {
             return new Inputs(prompts.build(transaction), RuleReasonsExplainer.explain(transaction),
                     transaction.getDecision());
         });
-        explanations.save(fromModel(id, inputs).orElseGet(
-                () -> new AlertExplanation(id, inputs.rulesText(), ExplanationSource.RULES, null)));
+        AlertExplanation explanation = fromModel(id, inputs).orElseGet(
+                () -> new AlertExplanation(id, inputs.rulesText(), ExplanationSource.RULES, null));
+        explanations.save(explanation);
+        metrics.explained(explanation.getSource());
     }
 
     private Optional<AlertExplanation> fromModel(UUID id, Inputs inputs) {

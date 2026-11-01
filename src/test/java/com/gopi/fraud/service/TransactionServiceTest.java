@@ -20,8 +20,10 @@ import com.gopi.fraud.exception.TransactionNotFoundException;
 import com.gopi.fraud.messaging.TransactionDecided;
 import com.gopi.fraud.messaging.TransactionEventPublisher;
 import com.gopi.fraud.messaging.TransactionSubmitted;
+import com.gopi.fraud.metrics.FraudMetrics;
 import com.gopi.fraud.repository.TransactionRepository;
 import com.gopi.fraud.rules.RuleResult;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -42,8 +44,10 @@ class TransactionServiceTest {
     private final TransactionRepository repository = mock(TransactionRepository.class);
     private final TransactionEventPublisher publisher = mock(TransactionEventPublisher.class);
     private final PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
     private final TransactionService service = new TransactionService(scoringService, repository,
-            new TransactionMapper(), publisher, new TransactionTemplate(transactionManager));
+            new TransactionMapper(), publisher, new TransactionTemplate(transactionManager),
+            new FraudMetrics(registry, List.of()));
 
     private final TransactionRequest request = new TransactionRequest("card-1", new BigDecimal("120.50"), "Casino",
             "GAMBLING", "Austin", 30.27, -97.74, NOW);
@@ -56,6 +60,7 @@ class TransactionServiceTest {
         verify(publisher).publish(new TransactionSubmitted(id, request));
         verify(scoringService, never()).score(any(), any());
         verify(repository, never()).save(any());
+        assertThat(registry.get(FraudMetrics.TRANSACTIONS_ACCEPTED).counter().count()).isEqualTo(1);
     }
 
     @Test
@@ -64,6 +69,7 @@ class TransactionServiceTest {
                 .when(publisher).publish(any(TransactionSubmitted.class));
 
         assertThatThrownBy(() -> service.accept(request)).isInstanceOf(EventPublishException.class);
+        assertThat(registry.get(FraudMetrics.TRANSACTIONS_ACCEPTED).counter().count()).isZero();
     }
 
     @Test
@@ -79,6 +85,22 @@ class TransactionServiceTest {
         order.verify(repository).save(any(Transaction.class));
         order.verify(transactionManager).commit(any());
         order.verify(publisher).publish(new TransactionDecided(event.id(), "card-1", 50, Decision.REVIEW));
+    }
+
+    @Test
+    void processCountsTheDecisionAndEachTriggeredRuleOnceCommitted() {
+        stubScoring(new ScoringResult(50, Decision.REVIEW, List.of(
+                RuleResult.triggered("RISKY_MERCHANT", 30, "category GAMBLING"),
+                RuleResult.triggered("ODD_HOURS", 20, "hour 2"))));
+
+        service.process(event);
+
+        verify(transactionManager).commit(any());
+        assertThat(decisions(Decision.REVIEW)).isEqualTo(1);
+        assertThat(decisions(Decision.APPROVE)).isZero();
+        assertThat(decisions(Decision.BLOCK)).isZero();
+        assertThat(ruleHits("RISKY_MERCHANT")).isEqualTo(1);
+        assertThat(ruleHits("ODD_HOURS")).isEqualTo(1);
     }
 
     @Test
@@ -116,6 +138,7 @@ class TransactionServiceTest {
         verify(scoringService, never()).score(any(), any());
         verify(repository, never()).save(any());
         verify(publisher).publish(new TransactionDecided(event.id(), "card-1", 50, Decision.REVIEW));
+        assertThat(decisions(Decision.REVIEW)).isZero();
     }
 
     @Test
@@ -128,6 +151,7 @@ class TransactionServiceTest {
         verify(repository, never()).save(any());
         verify(publisher, never()).publish(any(TransactionDecided.class));
         verify(transactionManager).rollback(any());
+        assertThat(registry.find(FraudMetrics.DECISIONS).counters()).allSatisfy(c -> assertThat(c.count()).isZero());
     }
 
     @Test
@@ -162,6 +186,14 @@ class TransactionServiceTest {
         assertThatThrownBy(() -> service.get(id))
                 .isInstanceOf(TransactionNotFoundException.class)
                 .hasMessageContaining(id.toString());
+    }
+
+    private double decisions(Decision decision) {
+        return registry.get(FraudMetrics.DECISIONS).tag("decision", decision.name()).counter().count();
+    }
+
+    private double ruleHits(String rule) {
+        return registry.get(FraudMetrics.RULE_HITS).tag("rule", rule).counter().count();
     }
 
     /** Not saved yet; scoring is stubbed; save echoes its argument, as JPA does for a new entity with an assigned id. */

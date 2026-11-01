@@ -20,9 +20,12 @@ import com.gopi.fraud.exception.TransactionNotFoundException;
 import com.gopi.fraud.explanation.ExplanationPromptBuilder;
 import com.gopi.fraud.explanation.ExplanationProvider;
 import com.gopi.fraud.messaging.TransactionDecided;
+import com.gopi.fraud.metrics.FraudMetrics;
 import com.gopi.fraud.repository.AlertExplanationRepository;
 import com.gopi.fraud.repository.TransactionRepository;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.math.BigDecimal;
+import java.util.List;
 import java.time.OffsetDateTime;
 import java.util.Optional;
 import java.util.UUID;
@@ -39,8 +42,10 @@ class ExplanationServiceTest {
     private final AlertExplanationRepository explanations = mock(AlertExplanationRepository.class);
     private final TransactionRepository transactions = mock(TransactionRepository.class);
     private final ExplanationProvider provider = mock(ExplanationProvider.class);
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
     private final ExplanationService service = new ExplanationService(explanations, transactions,
-            new ExplanationPromptBuilder(new ObjectMapper()), provider, mock(PlatformTransactionManager.class));
+            new ExplanationPromptBuilder(new ObjectMapper()), provider, mock(PlatformTransactionManager.class),
+            new FraudMetrics(registry, List.of()));
 
     private final Transaction transaction = new Transaction(UUID.randomUUID(), "card-1", new BigDecimal("120.50"),
             "Casino", "GAMBLING", "Austin", 30.27, -97.74, OffsetDateTime.parse("2026-10-25T02:30:00-05:00"), 50,
@@ -63,6 +68,7 @@ class ExplanationServiceTest {
 
         verifyNoInteractions(provider, transactions);
         verify(explanations, never()).save(any());
+        assertNoExplanationsCounted();
     }
 
     @Test
@@ -73,6 +79,7 @@ class ExplanationServiceTest {
 
         verifyNoInteractions(provider);
         verify(explanations, never()).save(any());
+        assertNoExplanationsCounted();
     }
 
     @Test
@@ -86,6 +93,8 @@ class ExplanationServiceTest {
         assertThat(saved.getSource()).isEqualTo(ExplanationSource.OLLAMA);
         assertThat(saved.getModel()).isEqualTo("llama3.2:1b");
         assertThat(saved.getCreatedAt()).isNotNull();
+        assertThat(explanationsFrom(ExplanationSource.OLLAMA)).isEqualTo(1);
+        assertThat(explanationsFrom(ExplanationSource.RULES)).isZero();
     }
 
     @Test
@@ -93,6 +102,8 @@ class ExplanationServiceTest {
         when(provider.explain(any())).thenThrow(new IllegalStateException("connection refused"));
 
         assertRulesFallback(save());
+        assertThat(explanationsFrom(ExplanationSource.RULES)).isEqualTo(1);
+        assertThat(explanationsFrom(ExplanationSource.OLLAMA)).isZero();
     }
 
     @Test
@@ -103,6 +114,8 @@ class ExplanationServiceTest {
 
             assertRulesFallback(save());
         }
+        assertThat(explanationsFrom(ExplanationSource.RULES)).isEqualTo(2);
+        assertThat(explanationsFrom(ExplanationSource.OLLAMA)).isZero();
     }
 
     @Test
@@ -123,6 +136,15 @@ class ExplanationServiceTest {
         assertThatThrownBy(() -> service.explainIfFlagged(decided)).isInstanceOf(TransactionNotFoundException.class);
 
         verify(explanations, never()).save(any());
+        assertNoExplanationsCounted();
+    }
+
+    private double explanationsFrom(ExplanationSource source) {
+        return registry.get(FraudMetrics.EXPLANATIONS).tag("source", source.name()).counter().count();
+    }
+
+    private void assertNoExplanationsCounted() {
+        assertThat(registry.find(FraudMetrics.EXPLANATIONS).counters()).allSatisfy(c -> assertThat(c.count()).isZero());
     }
 
     private AlertExplanation save() {

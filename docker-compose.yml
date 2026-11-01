@@ -55,6 +55,54 @@ services:
       timeout: 10s
       retries: 12
 
+  # Monitoring, only with `--profile monitoring`. Prometheus scrapes the app running on the host (mvn spring-boot:run).
+  # No volumes: metrics history and Grafana state are gone after `docker compose down`; the datasource and the
+  # dashboard are provisioned from ./monitoring on every start.
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    container_name: fraud-prometheus
+    profiles: [monitoring]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=1d
+    ports:
+      - "${PROMETHEUS_PORT:-9091}:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # the app on the host; Docker Desktop has it already, Linux needs this
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9090/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  grafana:
+    image: grafana/grafana:13.3.0-slim
+    container_name: fraud-grafana
+    profiles: [monitoring]
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}   # local default; set it anywhere else
+      GF_AUTH_ANONYMOUS_ENABLED: "true"        # the dashboard opens without logging in, read-only
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/fraud-overview.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
 
 volumes:
   fraud-pgdata:

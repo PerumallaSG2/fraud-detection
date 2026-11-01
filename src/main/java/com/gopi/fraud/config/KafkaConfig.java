@@ -2,6 +2,7 @@ package com.gopi.fraud.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gopi.fraud.messaging.Topics;
+import com.gopi.fraud.metrics.FraudMetrics;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.apache.kafka.clients.admin.NewTopic;
@@ -17,6 +18,7 @@ import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaAdmin;
 import org.springframework.kafka.core.KafkaOperations;
+import org.springframework.kafka.listener.ConsumerRecordRecoverer;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.support.serializer.DelegatingByTypeSerializer;
@@ -74,14 +76,20 @@ public class KafkaConfig {
     /**
      * Blocking retries: the failed record is retried in place, so later records on its partition wait and each
      * card's order holds. After the last attempt the record goes to {@code <topic>.DLT} (same partition, failure
-     * details in its headers) and the partition moves on. Unreadable records are not retried.
+     * details in its headers) and the partition moves on. Unreadable records are not retried. The recoverer waits for
+     * the dead-letter send, so the dead-letter counter only counts records that were stored there.
      */
     @Bean
-    DefaultErrorHandler kafkaErrorHandler(KafkaOperations<Object, Object> kafka, MessagingProperties properties) {
+    DefaultErrorHandler kafkaErrorHandler(KafkaOperations<Object, Object> kafka, MessagingProperties properties,
+                                          FraudMetrics metrics) {
         DeadLetterPublishingRecoverer toDeadLetterTopic = new DeadLetterPublishingRecoverer(kafka,
                 (record, ex) -> new TopicPartition(record.topic() + Topics.DLT_SUFFIX, record.partition()));
         MessagingProperties.Retry retry = properties.retry();
-        return new DefaultErrorHandler(toDeadLetterTopic,
+        ConsumerRecordRecoverer recoverer = (record, ex) -> {
+            toDeadLetterTopic.accept(record, ex);
+            metrics.deadLettered(record.topic() + Topics.DLT_SUFFIX);
+        };
+        return new DefaultErrorHandler(recoverer,
                 new FixedBackOff(retry.backoff().toMillis(), retry.maxAttempts() - 1L));
     }
 

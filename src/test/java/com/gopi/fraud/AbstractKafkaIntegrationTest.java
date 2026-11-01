@@ -11,6 +11,7 @@ import com.gopi.fraud.service.FraudScoringService;
 import java.time.Duration;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.context.annotation.Import;
@@ -25,8 +26,10 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 /**
  * Real beans, real HTTP, PostgreSQL and Kafka in containers, and a stub of Ollama's HTTP API. Subclasses share one
  * Spring context (same configuration and the same mocks), so one Kafka and one PostgreSQL serve them all. Scoring is
- * asynchronous: a POST returns 202 and the transaction shows up on GET once scored.
+ * asynchronous: a POST returns 202 and the transaction shows up on GET once scored. Metrics export is on (tests turn
+ * it off by default), so {@code /actuator/prometheus} is served as in the running app; tracing stays off.
  */
+@AutoConfigureObservability(tracing = false)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 @Import({PostgresTestcontainer.class, KafkaTestcontainer.class})

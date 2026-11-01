@@ -3,6 +3,7 @@ package com.gopi.fraud.service;
 import com.gopi.fraud.config.FraudProperties;
 import com.gopi.fraud.domain.Decision;
 import com.gopi.fraud.dto.TransactionRequest;
+import com.gopi.fraud.metrics.FraudMetrics;
 import com.gopi.fraud.repository.TransactionRepository;
 import com.gopi.fraud.repository.TransactionVelocityRepository;
 import com.gopi.fraud.rules.FraudRule;
@@ -32,13 +33,16 @@ public class FraudScoringService {
     private final TransactionRepository repository;
     private final TransactionVelocityRepository velocityRepository;
     private final FraudProperties properties;
+    private final FraudMetrics metrics;
 
     public FraudScoringService(List<FraudRule> rules, TransactionRepository repository,
-                               TransactionVelocityRepository velocityRepository, FraudProperties properties) {
+                               TransactionVelocityRepository velocityRepository, FraudProperties properties,
+                               FraudMetrics metrics) {
         this.rules = rules;
         this.repository = repository;
         this.velocityRepository = velocityRepository;
         this.properties = properties;
+        this.metrics = metrics;
     }
 
     /**
@@ -47,6 +51,10 @@ public class FraudScoringService {
      * it is the velocity counter's key for this transaction, so scoring it twice does not count it twice.
      */
     public ScoringResult score(UUID transactionId, TransactionRequest request) {
+        return metrics.timeScoring(() -> runRules(transactionId, request));
+    }
+
+    private ScoringResult runRules(UUID transactionId, TransactionRequest request) {
         // History is looked up lazily, and BLOCK transactions never count toward a card's baseline.
         RuleContext ctx = new RuleContext(request.cardId(), request.amount(), request.merchant(),
                 request.merchantCategory(), request.city(), request.latitude(), request.longitude(),
@@ -77,6 +85,7 @@ public class FraudScoringService {
         } catch (DataAccessException e) {
             log.warn("Velocity counter unavailable; skipping velocity for card {}: {}", request.cardId(),
                     e.getMessage());
+            metrics.velocityFailedOpen();
             return OptionalInt.empty();
         }
     }

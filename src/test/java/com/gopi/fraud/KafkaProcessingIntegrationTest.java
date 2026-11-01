@@ -12,6 +12,8 @@ import com.gopi.fraud.dto.ErrorResponse;
 import com.gopi.fraud.dto.TransactionRequest;
 import com.gopi.fraud.messaging.Topics;
 import com.gopi.fraud.messaging.TransactionSubmitted;
+import com.gopi.fraud.metrics.FraudMetrics;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -53,6 +55,9 @@ class KafkaProcessingIntegrationTest extends AbstractKafkaIntegrationTest {
     @Autowired
     private JdbcTemplate jdbc;
 
+    @Autowired
+    private MeterRegistry meters;
+
     private final String cardId = "card-" + UUID.randomUUID();
 
     @Test
@@ -75,6 +80,7 @@ class KafkaProcessingIntegrationTest extends AbstractKafkaIntegrationTest {
 
     @Test
     void aTransientFailureIsRetriedAndNothingIsDeadLettered() {
+        double deadBefore = deadLetterCount();
         doThrow(new IllegalStateException("db blip")).doThrow(new IllegalStateException("db blip"))
                 .doCallRealMethod().when(scoringService).score(any(), argThat(forThisCard()));
 
@@ -85,6 +91,7 @@ class KafkaProcessingIntegrationTest extends AbstractKafkaIntegrationTest {
         assertThat(jdbc.queryForObject("select count(*) from transactions where id = ?", Integer.class, id))
                 .isEqualTo(1);
         assertThat(deadLettered(Topics.TRANSACTIONS, Duration.ofSeconds(1))).isEmpty();
+        assertThat(deadLetterCount()).isEqualTo(deadBefore);
     }
 
     @Test
@@ -92,10 +99,12 @@ class KafkaProcessingIntegrationTest extends AbstractKafkaIntegrationTest {
         ArgumentMatcher<TransactionRequest> poison = r -> forThisCard().matches(r)
                 && r.amount().compareTo(new BigDecimal("13.13")) == 0;
         doThrow(new IllegalStateException("cannot score")).when(scoringService).score(any(), argThat(poison));
+        double deadBefore = deadLetterCount();
 
         UUID failed = accept(approve("13.13"));
         ConsumerRecord<String, byte[]> dead = awaitDeadLettered(Topics.TRANSACTIONS);
 
+        await().atMost(SCORED_WITHIN).until(() -> deadLetterCount() == deadBefore + 1);
         assertThat(header(dead, KafkaHeaders.DLT_EXCEPTION_MESSAGE)).contains("cannot score");
         assertThat(header(dead, KafkaHeaders.DLT_ORIGINAL_TOPIC)).isEqualTo(Topics.TRANSACTIONS);
         assertThat(new String(dead.value(), StandardCharsets.UTF_8)).contains(failed.toString());
@@ -109,11 +118,13 @@ class KafkaProcessingIntegrationTest extends AbstractKafkaIntegrationTest {
 
     @Test
     void anUnreadableMessageIsDeadLetteredWithoutRetries() throws Exception {
+        double deadBefore = deadLetterCount();
         kafka.send(Topics.TRANSACTIONS, cardId, "{not json".getBytes(StandardCharsets.UTF_8)).get();
 
         ConsumerRecord<String, byte[]> dead = awaitDeadLettered(Topics.TRANSACTIONS);
 
         assertThat(new String(dead.value(), StandardCharsets.UTF_8)).isEqualTo("{not json");
+        await().atMost(SCORED_WITHIN).until(() -> deadLetterCount() == deadBefore + 1);
         assertThat(header(dead, KafkaHeaders.DLT_EXCEPTION_FQCN)).contains("DeserializationException");
         // Never reached the service, so it was never scored (and not retried there either).
         verify(scoringService, times(0)).score(any(), argThat(forThisCard()));
@@ -133,6 +144,12 @@ class KafkaProcessingIntegrationTest extends AbstractKafkaIntegrationTest {
                 "select id from transactions where card_id = ? order by created_at", UUID.class, cardId);
 
         assertThat(processed).containsExactlyElementsOf(sent);
+    }
+
+    /** Every test here runs one at a time in the shared context, so a change in this count is this test's. */
+    private double deadLetterCount() {
+        return meters.get(FraudMetrics.DEAD_LETTERS).tag("topic", Topics.TRANSACTIONS + Topics.DLT_SUFFIX).counter()
+                .count();
     }
 
     private ArgumentMatcher<TransactionRequest> forThisCard() {

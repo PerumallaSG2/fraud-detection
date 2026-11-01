@@ -11,11 +11,13 @@ import com.gopi.fraud.config.FraudProperties;
 import com.gopi.fraud.domain.Decision;
 import com.gopi.fraud.domain.Transaction;
 import com.gopi.fraud.dto.TransactionRequest;
+import com.gopi.fraud.metrics.FraudMetrics;
 import com.gopi.fraud.repository.TransactionRepository;
 import com.gopi.fraud.repository.TransactionVelocityRepository;
 import com.gopi.fraud.rules.FraudRule;
 import com.gopi.fraud.rules.RuleContext;
 import com.gopi.fraud.rules.RuleResult;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -37,6 +39,7 @@ class FraudScoringServiceTest {
     private final TransactionRepository repository = mock(TransactionRepository.class);
     private final TransactionVelocityRepository velocityRepository = mock(TransactionVelocityRepository.class);
     private final FraudProperties properties = new FraudProperties();
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
     @Test
     void sumsPointsOfTriggeredRulesOnly() {
@@ -146,6 +149,27 @@ class FraudScoringServiceTest {
         assertThat(seen.get()).isEmpty();
         assertThat(result.score()).isEqualTo(30);
         assertThat(result.triggeredRules()).extracting(RuleResult::ruleName).containsExactly("OTHER");
+        assertThat(registry.get(FraudMetrics.VELOCITY_FAIL_OPEN).counter().count()).isEqualTo(1);
+    }
+
+    @Test
+    void aWorkingCounterIsNotCountedAsFailOpen() {
+        when(velocityRepository.recordAndCount(any(), any(), any(), any())).thenReturn(1);
+
+        score(new Rule("COUNT", ctx -> {
+            ctx.recentTransactionCount().apply(Duration.ofSeconds(60));
+            return RuleResult.notTriggered("COUNT");
+        }));
+
+        assertThat(registry.get(FraudMetrics.VELOCITY_FAIL_OPEN).counter().count()).isZero();
+    }
+
+    @Test
+    void timesEveryScoring() {
+        score(fires("A", 10));
+        score(quiet("A"));
+
+        assertThat(registry.get(FraudMetrics.SCORING).timer().count()).isEqualTo(2);
     }
 
     @Test
@@ -156,7 +180,8 @@ class FraudScoringServiceTest {
     }
 
     private ScoringResult score(FraudRule... rules) {
-        return new FraudScoringService(List.of(rules), repository, velocityRepository, properties)
+        return new FraudScoringService(List.of(rules), repository, velocityRepository, properties,
+                new FraudMetrics(registry, List.of()))
                 .score(TRANSACTION_ID, new TransactionRequest("card-1", new BigDecimal("50.00"), "Shop", "GROCERY", "Austin",
                         30.27, -97.74, NOW));
     }

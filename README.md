@@ -11,7 +11,8 @@ FALSE_POSITIVE, and gets a short plain-English explanation written by an LLM (Ol
 Bedrock), or built from the rule reasons when no model is available. The AI explains; it never decides.
 
 One Spring Boot application with a rules engine, Kafka between ingestion, scoring, alerts and explanations,
-PostgreSQL, and Redis for the velocity counter.
+PostgreSQL, and Redis for the velocity counter. Micrometer metrics are scraped by Prometheus and shown on a
+provisioned Grafana dashboard.
 
 ## Architecture
 
@@ -78,7 +79,8 @@ Points, thresholds, the score cap, the risky categories, the odd-hours window, t
 Java 21, Spring Boot 3.5.6, Maven, Spring Data JPA (Hibernate), Bean Validation, Flyway, PostgreSQL 16,
 Redis 7 (Spring Data Redis, Lettuce), Apache Kafka 3.9 (Spring for Apache Kafka; one KRaft node, `apache/kafka`
 image), Ollama (`llama3.2:1b`, optional), AWS SDK for Java 2 (`bedrockruntime`, Converse API, only with the
-`bedrock` profile), Spring Boot Actuator, Docker Compose. Tests use JUnit 5, Mockito, AssertJ, Awaitility and Testcontainers
+`bedrock` profile), Spring Boot Actuator, Micrometer with the Prometheus registry, Prometheus 3.15 and Grafana 13.3
+(optional, Compose profile `monitoring`), Docker Compose. Tests use JUnit 5, Mockito, AssertJ, Awaitility and Testcontainers
 (PostgreSQL, Redis, Kafka).
 
 ## How to run
@@ -92,6 +94,9 @@ a WARN is logged. Ollama is optional: without it, explanations are built from th
 docker compose up -d --wait   # Postgres 16 on host port 5433, Redis 7 on 6380, Kafka on 9094
 mvn spring-boot:run           # app on localhost:8080; Flyway creates the schema, the app creates the topics
 ```
+
+Add `--profile monitoring` to also start Prometheus and Grafana (see [Metrics](#metrics)):
+`docker compose --profile monitoring up -d --wait`, and the same flag on `down`.
 
 Submit a transaction:
 
@@ -313,9 +318,64 @@ Costs:
 - Blocking retries hold up a failing message's partition (about a third of the cards) for about 2 seconds.
 - One more piece of infrastructure (about 217 MB of image, a 256 MB heap) and slower, asynchronous tests.
 
+## Metrics
+
+The app publishes Micrometer metrics at `GET /actuator/prometheus` (Prometheus text format). Actuator exposes only
+`health`, `info` and `prometheus`; everything else (`env`, `beans`, `metrics`, `heapdump`, ...) is `404`. Every meter
+carries the tag `application="fraud-detection"`.
+
+| Prometheus name | Labels | Counts |
+|---|---|---|
+| `fraud_transactions_accepted_total` | | POSTs answered `202` (stored in Kafka); a `503` or `400` is not counted |
+| `fraud_decisions_total` | `decision` = APPROVE, REVIEW, BLOCK | Newly scored transactions, after the database commit. A redelivered message whose transaction is already saved is not counted again |
+| `fraud_rule_hits_total` | `rule` = the five rule names | One per rule that fired on a newly scored transaction |
+| `fraud_scoring_seconds` (histogram: `_bucket`, `_count`, `_sum`, `_max`) | `le` | Time to run every rule against one transaction, history query and Redis included. Every attempt is timed, retries too |
+| `fraud_dead_letters_total` | `topic` = `transactions.DLT`, `decisions.DLT` | Records stored on a dead-letter topic (counted after the send is acknowledged) |
+| `fraud_explanations_total` | `source` = OLLAMA, BEDROCK, RULES | Explanations saved; `RULES` is the fallback when the model failed or its answer was rejected |
+| `fraud_velocity_fail_open_total` | | Scorings where Redis was unavailable, so velocity could not fire |
+| `kafka_consumer_fetch_manager_records_lag_max`, `..._records_lag` | `client_id` = `consumer-<group>-<n>`, plus `topic`/`partition` on `records_lag` | Kafka client metrics, bound by Spring Boot: records behind the end of the partition |
+
+Every label value comes from a small fixed set. Card ids, transaction ids, merchants and cities are never labels (a
+test POSTs a transaction and checks that neither its card id nor its id appears anywhere in the scrape). Spring
+Boot's `http_server_requests_seconds` uses the URI template (`/api/transactions/{id}`), not the path. Known labels
+are registered at 0 at startup, so every series exists before the first transaction.
+
+Percentiles: the scoring timer is a histogram (buckets from 1 ms to 5 s), so p50/p95/p99 are computed in Prometheus
+with `histogram_quantile`, which also aggregates correctly across instances. The Prometheus registry doesn't export
+client-side percentiles next to a histogram, so there are none.
+
+Consumer lag is what each consumer measured at its last fetch, so it is only reported by a consumer that is running:
+if a consumer dies, its series disappears instead of growing. Watching committed-offset lag per group would need a
+separate poller (or an exporter) using the Kafka admin API; not built.
+
+### Prometheus and Grafana
+
+```
+docker compose --profile monitoring up -d --wait   # also Prometheus on localhost:9091, Grafana on localhost:3001
+mvn spring-boot:run
+```
+
+- Prometheus (`prom/prometheus:v3.15.1`) scrapes `host.docker.internal:8080/actuator/prometheus` every 5 s
+  (`monitoring/prometheus.yml`), keeps 1 day, and has no volume.
+- Grafana (`grafana/grafana:13.3.0-slim`) gets its Prometheus datasource and the **Fraud detection** dashboard from
+  `monitoring/grafana/provisioning`, so both are there with no setup: open
+  <http://localhost:3001/d/fraud-overview>. Anonymous users can view it. To edit, log in as `admin` with the
+  password from `GRAFANA_ADMIN_PASSWORD` (default `admin`, for local use only; set it anywhere else, e.g.
+  `GRAFANA_ADMIN_PASSWORD=... docker compose --profile monitoring up -d --wait`). The dashboard is read-only in the
+  UI; change the JSON file instead. No volume: Grafana state goes away on `down`.
+- Panels: accepted/s, decisions/s by outcome, rule hits/s by rule, scoring p50/p95/p99, dead-lettered messages by
+  topic, explanations/s by source, velocity fail-open, consumer lag per consumer.
+- Host ports are `PROMETHEUS_PORT` (9091) and `GRAFANA_PORT` (3001), away from the usual 9090 and 3000.
+- Both images are about 420 MB to download and about 1.5 GB on disk (Grafana 1.15 GB, Prometheus 357 MB), which is
+  why they sit behind a profile and a plain `docker compose up` doesn't pull them. Remove them with
+  `docker image rm grafana/grafana:13.3.0-slim prom/prometheus:v3.15.1`.
+
+`/actuator/prometheus` has no authentication. That's fine on a laptop; in production, serve Actuator on a separate
+management port that only the scraper can reach.
+
 ## Testing
 
-`mvn test` runs 178 tests, all passing at the last run (0 skipped). It needs Docker: tests that touch the database run
+`mvn test` runs 186 tests, all passing at the last run (0 skipped). It needs Docker: tests that touch the database run
 against real PostgreSQL 16 (`postgres:16-alpine`, the same image as Docker Compose), the full-app tests also against
 Kafka (`apache/kafka:3.9.2`, same as Compose) and the velocity tests against Redis, all through Testcontainers.
 Without Docker every container test fails rather than skips. No test needs Ollama or AWS: both are replaced by a
@@ -326,18 +386,20 @@ under a second in total.
 | Layer | Tests | Covers |
 |---|---|---|
 | Rules | 39 | Each rule's boundaries, offsets, case-insensitivity, history baseline, BLOCK exclusion; velocity limit, one count call, empty count; geo distance, speed limit, out-of-order timestamps |
-| Scoring service | 11 | Point sum, rule order, cap at 100, decisions at 39/40/70/71, history lookup excludes BLOCK, velocity count and fail-open on Redis errors |
-| Transaction service and mapper | 11 | Accept publishes under the returned id, publish failure propagates; process scores then saves then publishes after commit, rule hits, an already saved id is not rescored but republished, scoring failure saves and publishes nothing; 404, 2-decimal amounts |
+| Scoring service | 13 | Point sum, rule order, cap at 100, decisions at 39/40/70/71, history lookup excludes BLOCK, velocity count and fail-open on Redis errors (counted; a working Redis is not), every scoring timed |
+| Transaction service and mapper | 12 | Accept publishes under the returned id and is counted, publish failure propagates and is not; process scores then saves then publishes after commit, rule hits, an already saved id is not rescored but republished, scoring failure saves and publishes nothing; decision and each rule hit counted after commit, not for an already saved id or a failed scoring; 404, 2-decimal amounts |
 | Alert service | 12 | REVIEW/BLOCK open an alert and APPROVE doesn't, a redelivered decision opens no second alert, newest-first paging with and without status, explanations added with one lookup per page (none for an empty page), resolve returns the explanation, 404, 409 keeps the first outcome |
-| Explanations (no containers) | 33 | Prompt has only transaction fields and rules, no ids; injected quotes and newlines stay inside their JSON string; caps; output cleaning, 500-character cap, rejecting blank, links, approval, "blocked" for a REVIEW; rule-reasons text; service: APPROVE and already-explained skipped, model answer saved with source and model, failure or rejected answer falls back, never changes the transaction; Ollama against a stub (request body, 500, no answer, timeout, not running); Bedrock Converse against a stub (path, body without temperature, reasoning skipped, non-`end_turn` stops, errors); exactly one provider per profile |
+| Explanations (no containers) | 33 | Prompt has only transaction fields and rules, no ids; injected quotes and newlines stay inside their JSON string; caps; output cleaning, 500-character cap, rejecting blank, links, approval, "blocked" for a REVIEW; rule-reasons text; service: APPROVE and already-explained skipped, model answer saved with source and model, failure or rejected answer falls back (each counted by source), never changes the transaction; Ollama against a stub (request body, 500, no answer, timeout, not running); Bedrock Converse against a stub (path, body without temperature, reasoning skipped, non-`end_turn` stops, errors); exactly one provider per profile |
 | Repositories (`@DataJpaTest`, real PostgreSQL) | 11 | Save/load with ordered rule hits, offset round trip, history query; alert save/load, status filter with newest-first paging, one alert per transaction, exists by transaction; explanation save/load, a second one for the same transaction rejected (not merged) |
 | Velocity counter (`@DataRedisTest`, real Redis) | 9 | Window bounds, transaction timestamps, cards isolated, same id counted once, old entries dropped, TTL |
 | Controllers (`@WebMvcTest`) | 25 | 202 with `Location` and PENDING body, 503 when Kafka doesn't accept, 400 cases (nothing published), 404, 405, 500 without leaked details; alert list params and shape with and without an explanation, PATCH 200/400/404/409 |
 | End to end (`@SpringBootTest`, real HTTP, Kafka and PostgreSQL) | 7 | POST 202 then GET round trip, offset kept through Kafka, rule order, spike scenario, blocked baseline, impossible travel (velocity mocked) |
 | Alerts end to end (real HTTP, Kafka and PostgreSQL) | 5 | REVIEW and BLOCK open alerts, APPROVE doesn't, newest first, resolve then 409, 404 |
 | Explanations end to end (real HTTP, Kafka, PostgreSQL, Ollama stub) | 5 | REVIEW explained by the model with score and decision unchanged; an Ollama error and a contradicting answer fall back to the rule reasons; a hanging model delays neither scoring nor the alert; APPROVE gets none |
-| Kafka processing (real Kafka and PostgreSQL) | 5 | A duplicated message is scored, saved and alerted once; a transient failure is retried with nothing dead-lettered; a permanent one is dead-lettered after 3 attempts and the partition moves on; unreadable JSON is dead-lettered unscored; one card's 10 transactions are processed in order |
+| Kafka processing (real Kafka and PostgreSQL) | 5 | A duplicated message is scored, saved and alerted once; a transient failure is retried with nothing dead-lettered; a permanent one is dead-lettered after 3 attempts and the partition moves on; unreadable JSON is dead-lettered unscored (both counted on `fraud_dead_letters_total`, the retried one not); one card's 10 transactions are processed in order |
 | Velocity end to end (real HTTP, Kafka, PostgreSQL and Redis) | 3 | 6th within 60s fires and reviews, timestamp not server time, blocked attempts count |
+| Metrics (no containers) | 2 | Every decision, rule, source and dead-letter topic registered at 0; counters move by tag |
+| Metrics end to end (real HTTP, Kafka and PostgreSQL) | 3 | A REVIEW moves accepted, decision, rule-hit, scoring and explanation meters; `/actuator/prometheus` serves every metric name including Kafka consumer lag, and neither the card id nor the transaction id; only `health`, `info` and `prometheus` exposed |
 | Application context | 2 | Context loads, health endpoint |
 
 Every database test runs Flyway's V1 to V4 on a fresh PostgreSQL 16 and Hibernate validates the schema against it,
@@ -386,7 +448,6 @@ Not built yet:
 - Client idempotency key, so a retried request is not scored, counted or stored twice
 - Splitting ingestion, scoring and alerts into separate deployable services (they are already decoupled by Kafka)
 - Replaying dead-lettered messages
-- Prometheus and Grafana monitoring
 - k6 load tests
 - Replaying a Kaggle fraud dataset through the API
 
