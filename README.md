@@ -12,7 +12,8 @@ Bedrock), or built from the rule reasons when no model is available. The AI expl
 
 One Spring Boot application with a rules engine, Kafka between ingestion, scoring, alerts and explanations,
 PostgreSQL, and Redis for the velocity counter. Micrometer metrics are scraped by Prometheus and shown on a
-provisioned Grafana dashboard.
+provisioned Grafana dashboard. A k6 load test measures throughput and latency on a laptop (see
+[Load test](#load-test)).
 
 ## Architecture
 
@@ -80,7 +81,7 @@ Java 21, Spring Boot 3.5.6, Maven, Spring Data JPA (Hibernate), Bean Validation,
 Redis 7 (Spring Data Redis, Lettuce), Apache Kafka 3.9 (Spring for Apache Kafka; one KRaft node, `apache/kafka`
 image), Ollama (`llama3.2:1b`, optional), AWS SDK for Java 2 (`bedrockruntime`, Converse API, only with the
 `bedrock` profile), Spring Boot Actuator, Micrometer with the Prometheus registry, Prometheus 3.15 and Grafana 13.3
-(optional, Compose profile `monitoring`), Docker Compose. Tests use JUnit 5, Mockito, AssertJ, Awaitility and Testcontainers
+(optional, Compose profile `monitoring`), Docker Compose, k6 (load test). Tests use JUnit 5, Mockito, AssertJ, Awaitility and Testcontainers
 (PostgreSQL, Redis, Kafka).
 
 ## How to run
@@ -373,6 +374,182 @@ mvn spring-boot:run
 `/actuator/prometheus` has no authentication. That's fine on a laptop; in production, serve Actuator on a separate
 management port that only the scraper can reach.
 
+## Load test
+
+A [k6](https://k6.io) script (`load-test/fraud-load.js`) POSTs transactions at a fixed arrival rate, rising in
+stages, and the numbers below come from running it on one laptop. **They are laptop numbers, not production
+capacity:** k6, the app, PostgreSQL, Kafka, Redis, Prometheus and Grafana all shared the same 8 cores.
+
+```
+brew install k6
+docker compose --profile monitoring up -d --wait
+mvn -DskipTests package && java -jar target/fraud-detection-0.0.1-SNAPSHOT.jar
+load-test/run.sh smoke                       # 10/s for 20 s: checks the script and the expected decisions
+load-test/run.sh steps                       # 25, 50, 100, 200, 400, 800, 1600 /s; STEPS=900,1000 for others
+RATE=700 load-test/run.sh sustain            # stages up to RATE, then a 5 minute hold (HOLD_S)
+```
+
+`run.sh` runs k6, waits until every transaction has a decision, then prints end-to-end times and the dashboard's
+numbers per stage. Its output goes to `load-test/results/` (git-ignored; the Kafka dumps reach about 100 MB per run, so delete
+it afterwards). The rows it creates all have card ids starting with `lt-`.
+
+### Setup
+
+| | |
+|---|---|
+| Machine | MacBook, Apple M2 (8 cores), 8 GB RAM, macOS 26.5. The step runs were on battery (Low Power Mode off), the sustained run on AC power |
+| Docker | Docker Desktop 4.54, engine 29.1.2, VM with 8 CPUs and 3.8 GB |
+| App | `java -jar` (OpenJDK 21.0.10, default flags: G1, max heap 2 GB = 1/4 of RAM), default profile, not the test profile. Not `mvn spring-boot:run`, which starts the JVM with `-XX:TieredStopAtLevel=1` (no C2 JIT), a startup setting that would understate throughput |
+| Settings | All defaults from `application.yml`: 3 partitions per topic, 3 listener threads per consumer group, producer `acks=all`, Hikari pool 10, Tomcat 200 threads |
+| Explanations | Ollama not running, so every REVIEW/BLOCK explanation fell back to the rule reasons at once. Explanations are off the scoring path |
+| Load | Open model (`ramping-arrival-rate`): k6 starts requests at the target rate however slow the app is. Each stage ramps for 15 s and then holds for 60 s; numbers are from the hold only |
+
+The data is built so rules fire only where intended:
+- Card ids rotate over 100,000 cards, so a card comes back at most once a minute even at 1,600/s, and velocity never fires.
+- Each card has a fixed city (no geo mismatch) and a base amount varied by ±25% (never 3× its average, so no spike).
+- Timestamps are "now" in an offset where the local time is midday (no odd hours).
+- In every 100 transactions:
+  - 2 are REVIEW: GAMBLING at 02:xx local, 30 + 20 = 50.
+  - 1 is BLOCK: the same plus 9,000.00, which adds the amount spike, 90.
+
+Every run got exactly that mix (97.0% / 2.0% / 1.0% of decisions, counted from the `decisions` topic). The only rule hits were RISKY_MERCHANT, ODD_HOURS and AMOUNT_SPIKE, and
+the sampled transactions (below) were never given a different decision than expected.
+
+### How it is measured
+
+- **POST latency and throughput.** k6's `http_req_duration` for `POST /api/transactions`, and the rate of `202`
+  responses. A `202` means Kafka acknowledged the record (`acks=all`), so this is the API plus the Kafka write.
+- **End-to-end, POST to decision: from Kafka record timestamps, with no polling.** Polling every transaction with GET
+  would add load to the same app and database, and the result would depend on the poll interval. So after the run
+  `load-test/e2e-latency.py` reads both topics and computes, for **every** transaction, the `decisions` record's
+  timestamp minus the `transactions` record's timestamp. Both are stamped by the app's own producer (one clock). The
+  decision is published right after the scored row is committed, which is when `GET /api/transactions/{id}` starts
+  returning it. Not included: the time between the POST arriving and its record being written, which is part of the
+  POST latency above (under 1 ms p50 here).
+- **Client-side check: sampled GET.** A second k6 scenario POSTs 2 transactions per second of its own and polls each
+  one with GET until it is scored. It polls every 25 ms for the first second, then every 250 ms. Each sample
+  includes the POST, the GET and up to one poll interval of waiting. That added about 26 GET/s on average in step
+  run 1, small next to the load.
+- **Dashboard.** `load-test/capture-metrics.py` runs the Grafana dashboard's own panel queries (read from
+  `fraud-overview.json`, sent through Grafana's `/api/ds/query`) over each hold. It also runs a few Prometheus queries
+  for finding the bottleneck: Spring Kafka's listener and template timers, Hikari, CPU and GC. `docker stats` and
+  `ps` are sampled every 5 s.
+
+### Results: steps
+
+From step run 2 (25 to 1,000/s) and step run 1 (the 1,600/s row). Each ran against a newly started app (run 1 after a
+20 s smoke run), so the JVM was warmed up only by the stages before it. Step run 2 went on to 1,100,
+1,200 and 1,300/s, but Docker Desktop was quit partway through 1,100/s, so those stages are left out. In the rows they have in common (25 to 800) the
+two runs agree to within a few ms at p95, except one: at 800/s, end-to-end p95 was 63 ms in run 2 and 43 ms in run 1.
+
+| Target /s | Achieved /s | POST p50 / p95 / p99 (ms) | Errors | End-to-end p50 / p95 / p99 (ms) | Sampled e2e p50 / p95 (ms) | Scoring p95 (ms) | Scoring threads busy |
+|---:|---:|---|---:|---|---|---:|---:|
+| 25 | 25.0 | 2.9 / 5.8 / 7.5 | 0 | 7 / 14 / 20 | 33 / 38 | 4.1 | 0.06 |
+| 50 | 50.0 | 1.7 / 3.8 / 6.4 | 0 | 5 / 10 / 25 | 31 / 36 | 2.6 | 0.09 |
+| 100 | 100.0 | 1.1 / 1.6 / 2.6 | 0 | 3 / 4 / 7 | 29 / 30 | 1.3 | 0.10 |
+| 200 | 200.0 | 0.7 / 1.2 / 1.9 | 0 | 2 / 3 / 6 | 28 / 28 | 1.0 | 0.14 |
+| 400 | 400.0 | 0.4 / 0.8 / 1.7 | 0 | 2 / 4 / 11 | 26 / 27 | 1.0 | 0.22 |
+| 800 | 800.0 | 0.5 / 1.0 / 2.3 | 0 | 3 / 63 / 113 | 27 / 81 | 1.3 | 0.61 |
+| 900 | 900.0 | 0.6 / 1.1 / 2.3 | 0 | 10 / 168 / 256 | 27 / 160 | 1.4 | 0.80 |
+| 1,000 | 1000.0 | 0.6 / 1.2 / 2.8 | 0 | 545 / 1,500 / 1,708 | 576 / 1,522 | 1.4 | 0.98 |
+| 1,600 | 1590.5 | 0.7 / 3.7 / 19.7 | 0 | 35,349 / 45,023 / 45,962 | 18,687 / 28,559 | 2.0 | 0.99 |
+
+- Errors means a non-`202` POST. Dead letters were 0 in every stage.
+- Scoring threads busy is `rate(spring_kafka_listener_seconds_sum)` per `fraud-scoring` listener thread, averaged
+  over the hold: seconds spent in the listener per second, where 1.0 is busy all the time. Scoring p95 is the
+  dashboard's `histogram_quantile` over `fraud_scoring_seconds` (rules only).
+- At 1,600/s:
+  - k6 fell 572 requests short of the target (552 `dropped_iterations` over the run).
+  - Velocity failed open once: one Redis call timed out at 200 ms.
+  - 55 sampled transactions weren't scored within the sampler's 30 s limit.
+  - Every transaction still got a decision once the load stopped.
+- Sampled end-to-end is higher than the Kafka-timestamp number at low load. That gap is the sampler's own POST and
+  GET plus up to 25 ms of poll interval, which is why it isn't the main measurement.
+- POST latency is higher at 25/s than at 400/s. At low rates the JVM is still warming up (these were the first
+  stages after startup), and connections sit idle between requests.
+
+### Where it starts to struggle, and why
+
+**Up to 800/s it keeps up:** every transaction is decided in 3 ms at the median. **At 900/s queueing starts:** the
+p95 goes from 63 ms to 168 ms while the median stays at 10 ms. **At 1,000/s it can't keep up:** end-to-end
+p95 is 1.5 s and grows through the hold. At 1,600/s the API still takes everything with no errors (POST p99 is
+under 20 ms), but decisions top out at about 780/s and the backlog grows by about 760 records a second. By the end of
+the hold the dashboard shows about 15,000 records of lag per scoring partition.
+
+**The bottleneck is the scoring consumer: 3 threads, one record at a time each.** Evidence from the dashboard queries:
+- **Scoring threads are saturated.** Busy is 0.80 per thread at 900/s, 0.98 at 1,000/s and 0.99 at 1,600/s. The
+  `fraud-alerts` and `fraud-explanations` listener threads never went above 0.06.
+- **The ceiling matches the arithmetic.** At 1,000/s each record took 3.0 ms in the listener, so 3 threads can do
+  about 3 / 3.0 ms ≈ 1,000/s. At 1,600/s it was 3.8 ms per record, so about 790/s, and decisions were measured at
+  about 780/s.
+- **Not the rules.** Scoring p95 is 1.4 ms at 1,000/s, under half of the 3.0 ms per record. Most of a record's time
+  is the rest of `TransactionService.process`:
+  - the saved-id check and history query,
+  - the insert with its rule hits and the commit, round trips to PostgreSQL in the Docker VM,
+  - the decision publish it waits for (0.5 ms average).
+- **Not the database pool.** Hikari peaked at 5 active connections of 10 at 1,000/s (6 at 1,600/s), with 0 pending at
+  every stage.
+- **Not CPU, at the knee.**
+  - At 1,000/s the app used 12% of all cores (`process_cpu_usage`, about 1 core) and the laptop 76%
+    (`system_cpu_usage`).
+  - In `docker stats`, Kafka was about 1.3 cores and PostgreSQL about 0.6 cores.
+  - Per-record time does grow with load (1.7 ms at 400/s, 3.0 ms at 1,000/s, 3.8 ms at 1,600/s), because
+    everything on the laptop slows down as it fills up.
+- **Not the API or the Kafka write.** POST p95 stayed at or under 1.2 ms through 1,000/s, with no 503s.
+- **The cap is the partition count.** A partition goes to one thread, so `fraud.messaging.partitions` (3) sets the
+  maximum parallelism.
+
+**What would likely raise the limit (not done here):**
+- more partitions with matching listener concurrency (per-card order is kept, since cards are keyed);
+- batching the inserts and commits;
+- not waiting for each decision's publish on the scoring thread.
+
+**A caveat on the lag panel.** At 1,000/s the dashboard's lag panel stayed at 0, even though transactions waited
+1.5 s. `records_lag_max` is measured from the consumer's position, and the position moves forward as soon as `poll()` hands
+a batch to the listener thread (up to `max.poll.records`, 500), before those records are processed. So a backlog that
+fits in one batch per thread doesn't show up as lag. Lag only appeared once the backlog outgrew that (at 1,600/s). End-to-end time is the signal to watch. Also, `records_lag_max` keeps its last
+value for a while after the consumer goes idle.
+
+### Results: sustained
+
+700/s is 70% of the 1,000/s knee. The run ramps through 175, 350 and 525/s, 30 s each, then holds 700/s for
+5 minutes. It ran twice, on AC power, after a fresh `docker compose down`/`up` and app start.
+
+| | Run 2 (nothing else running) | Run 1 |
+|---|---:|---:|
+| Transactions in the hold | 209,987 (700.0/s) | 209,827 (699.4/s) |
+| POST p50 / p95 / p99 / max (ms) | 0.4 / 1.1 / 2.8 / 85 | 0.4 / 1.2 / 3.7 / 255 |
+| Errors (non-`202`), dead letters | 0, 0 | 0, 0 |
+| `dropped_iterations` (whole run) | 13 | 172 |
+| End-to-end p50 / p95 / p99 / max (ms) | 2 / 61 / 448 / 683 | 2 / 100 / 685 / 1,124 |
+| Without a decision after the run | 0 | 0 |
+| Scoring p95, dashboard (ms) | 1.3 | 1.4 |
+| Scoring threads busy, avg / max of 20 s windows | 0.52 / 0.81 | 0.53 / 0.93 |
+| Consumer lag (dashboard) | 0 | 0 |
+| Hikari active max / pending | 4 / 0 | 3 / 0 |
+| Velocity fail-open | 0 | 0 |
+
+It holds 700/s: no errors, no dead letters, every transaction decided, median end-to-end 2 ms. The tail is not
+flat, though. End-to-end p95 per 30 s of run 2's hold:
+
+| 30 s window | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| p95 (ms) | 18 | 235 | 246 | 28 | 17 | 20 | 20 | 20 | 46 | 541 |
+
+Seven of the ten windows have p95 between 17 and 46 ms. The other three come in two bursts of 30–60 s, with p95 up
+to 541 ms (p99 640). What was measured during the bursts:
+- The scoring listener's time per record went up to 2.8–3.2 ms (20 s averages), against about 2.0 ms the rest of the
+  hold.
+- Laptop CPU rose to about 70%.
+- GC pauses stayed flat (about 2 ms/s).
+- PostgreSQL checkpoints run continuously (each spread over 270 s), so they don't line up with the bursts.
+
+The cause isn't pinned down. At 700/s the three scoring threads have little headroom (0.52 busy on average), so any
+slowdown of the shared laptop shows up straight away as queueing.
+
+Run 1 had the same shape. Its last 30 s (p95 799 ms) overlapped with a 100 MB Python parse of the step runs' Kafka
+dumps on the same laptop. That's why it was rerun.
+
 ## Testing
 
 `mvn test` runs 186 tests, all passing at the last run (0 skipped). It needs Docker: tests that touch the database run
@@ -448,6 +625,5 @@ Not built yet:
 - Client idempotency key, so a retried request is not scored, counted or stored twice
 - Splitting ingestion, scoring and alerts into separate deployable services (they are already decoupled by Kafka)
 - Replaying dead-lettered messages
-- k6 load tests
 - Replaying a Kaggle fraud dataset through the API
 
