@@ -1,0 +1,126 @@
+{
+  "dataset": "kartik2112/fraud-detection fraudTest.csv (Sparkov, CC0-1.0)",
+  "prepared": {
+    "rows": 555719,
+    "rejected": {},
+    "fraud": 2145,
+    "normal": 553574,
+    "fraudRate": 0.00386,
+    "cards": 924,
+    "first": "2020-06-21T12:14:25-04:00",
+    "last": "2020-12-31T23:20:18-10:00",
+    "categories": [
+      "ENTERTAINMENT",
+      "FOOD_DINING",
+      "GAS_TRANSPORT",
+      "GROCERY_NET",
+      "GROCERY_POS",
+      "HEALTH_FITNESS",
+      "HOME",
+      "KIDS_PETS",
+      "MISC_NET",
+      "MISC_POS",
+      "PERSONAL_CARE",
+      "SHOPPING_NET",
+      "SHOPPING_POS",
+      "TRAVEL"
+    ],
+    "homeToMerchantKm": {
+      "p50": 78.2,
+      "p95": 120.5,
+      "max": 150.9
+    },
+    "sameCardGapSeconds": {
+      "p1": 159.0,
+      "p50": 13849.0
+    },
+    "sameCardGapsUnder60s": 2218
+  },
+  "replay": {
+    "sent": 555719,
+    "accepted": 555719,
+    "statuses": {
+      "202": 555719
+    },
+    "seconds": 793.9,
+    "ratePerSecond": 700.0,
+    "targetRate": 700.0,
+    "postMs": {
+      "p50": 0.8,
+      "p95": 2.3,
+      "p99": 6.1,
+      "max": 347.0
+    }
+  },
+  "evaluated": 555719,
+  "acceptedButNotScored": 0,
+  "fraud": 2145,
+  "normal": 553574,
+  "decisionsByLabel": {
+    "fraud": {
+      "APPROVE": 1030,
+      "REVIEW": 1039,
+      "BLOCK": 76
+    },
+    "normal": {
+      "APPROVE": 508307,
+      "REVIEW": 44448,
+      "BLOCK": 819
+    }
+  },
+  "flagged": {
+    "tp": 1115,
+    "fp": 45267,
+    "fn": 1030,
+    "tn": 508307,
+    "precision": 0.024,
+    "recall": 0.5198,
+    "falsePositiveRate": 0.0818
+  },
+  "blockOnly": {
+    "tp": 76,
+    "fp": 819,
+    "fn": 2069,
+    "tn": 552755,
+    "precision": 0.0849,
+    "recall": 0.0354,
+    "falsePositiveRate": 0.0015
+  },
+  "rules": {
+    "AMOUNT_SPIKE": {
+      "onFraud": 1014,
+      "onFraudRate": 0.4727,
+      "onNormal": 32850,
+      "onNormalRate": 0.0593,
+      "precision": 0.0299
+    },
+    "GEO_MISMATCH": {
+      "onFraud": 177,
+      "onFraudRate": 0.0825,
+      "onNormal": 13236,
+      "onNormalRate": 0.0239,
+      "precision": 0.0132
+    },
+    "ODD_HOURS": {
+      "onFraud": 734,
+      "onFraudRate": 0.3422,
+      "onNormal": 90294,
+      "onNormalRate": 0.1631,
+      "precision": 0.0081
+    },
+    "RISKY_MERCHANT": {
+      "onFraud": 0,
+      "onFraudRate": 0.0,
+      "onNormal": 0,
+      "onNormalRate": 0.0,
+      "precision": null
+    },
+    "VELOCITY": {
+      "onFraud": 0,
+      "onFraudRate": 0.0,
+      "onNormal": 0,
+      "onNormalRate": 0.0,
+      "precision": null
+    }
+  }
+}

@@ -13,7 +13,8 @@ Bedrock), or built from the rule reasons when no model is available. The AI expl
 One Spring Boot application with a rules engine, Kafka between ingestion, scoring, alerts and explanations,
 PostgreSQL, and Redis for the velocity counter. Micrometer metrics are scraped by Prometheus and shown on a
 provisioned Grafana dashboard. A k6 load test measures throughput and latency on a laptop (see
-[Load test](#load-test)).
+[Load test](#load-test)), and a replay of a labelled synthetic dataset measures precision, recall and false positive
+rate (see [Accuracy](#accuracy-sparkov-replay)).
 
 ## Architecture
 
@@ -550,6 +551,127 @@ slowdown of the shared laptop shows up straight away as queueing.
 Run 1 had the same shape. Its last 30 s (p95 799 ms) overlapped with a 100 MB Python parse of the step runs' Kafka
 dumps on the same laptop. That's why it was rerun.
 
+## Accuracy (Sparkov replay)
+
+How well do the five rules, as they are, separate fraud from normal transactions? To find out, a labelled dataset was
+replayed through the real path (POST, Kafka, scoring, PostgreSQL) and the stored decisions were compared with the
+labels. **The rules were written before this dataset was looked at and were not changed to fit it.** The numbers
+below are from one run on 2026-11-02 (commit `a477900` plus the `accuracy/` scripts), on the same laptop as the load
+test.
+
+### Dataset
+
+[Credit Card Transactions Fraud Detection Dataset](https://www.kaggle.com/datasets/kartik2112/fraud-detection) by
+Kartik Shenoy on Kaggle, license **CC0-1.0** (public domain), generated with Brandon Harris's
+[Sparkov Data Generation](https://github.com/namebrandon/Sparkov_Data_Generation). It is **synthetic**: simulated
+customers, merchants and fraud, not real card data.
+
+Only `fraudTest.csv` was replayed: 555,719 transactions, 2,145 of them fraud (0.39%), on 924 cards, from 2020-06-21 to
+2020-12-31. At 700/s that is about 13 minutes of sending, under the ~900/s the scorer kept up with in the load test,
+and the fraud count is large enough for stable rates. `fraudTrain.csv` (1.3M rows) was not used at all, so it stays
+available for developing any rule change. The CSV lives in the git-ignored `accuracy/data/` during a run and is
+deleted afterwards. Only the aggregate numbers (`accuracy/results.json`) are kept.
+
+### How Sparkov fields map to the API
+
+| API field | Sparkov field | Choice |
+|---|---|---|
+| `cardId` | `cc_num` | `sp-` + the first 16 hex characters of SHA-256(`cc_num`). No card numbers reach the app |
+| `amount` | `amt` | As is (always 2 decimals; no row was rejected) |
+| `merchant` | `merchant` | Without the `fraud_` prefix that every Sparkov merchant name has (it isn't the label) |
+| `merchantCategory` | `category` | Uppercased as is (`SHOPPING_NET`, `MISC_NET`, `GROCERY_POS`...). None of the 14 categories is gambling, crypto or wire transfer, so **RISKY_MERCHANT cannot fire**. `shopping_net` and `misc_net` (online shopping, online miscellaneous) aren't on the risky list. Adding them because they are this dataset's high-fraud categories would be fitting the rules to the labels |
+| `latitude`, `longitude` | `merch_lat`, `merch_long` | Where the purchase happens. The cardholder's `lat`/`long` is a home address that never changes per card, so geo mismatch could never fire on it. Sparkov places the merchant at a random point near home: median 78 km, at most 151 km away |
+| `city` | `city` | The cardholder's city, the only city in the data |
+| `timestamp` | `trans_date_trans_time` | The file has no time zone. It is read as the cardholder's local time, with the UTC offset (daylight saving included) of the cardholder's `state`; a state that spans zones uses its most populous one. Odd hours reads the local hour, so it doesn't depend on that choice; only the instants used by velocity and geo do |
+
+Not sent: `first`, `last`, `gender`, `street`, `zip`, `dob`, `job`, `city_pop`, `trans_num`, `unix_time`, the raw
+`cc_num` and the label `is_fraud`. `state` is only used to choose the offset.
+
+### How it is run
+
+```
+docker compose up -d --wait
+mvn -DskipTests package && OLLAMA_URL=http://localhost:1 java -jar target/fraud-detection-0.0.1-SNAPSHOT.jar
+accuracy/run.sh run       # RATE=700 by default; LIMIT=2000 RATE=50 for a smoke run
+accuracy/run.sh purge     # afterwards: delete the sp-% rows, the dataset and the per-row work files
+```
+
+- `prepare.py` maps the CSV and sorts it by timestamp.
+- `replay.py` sends it at a fixed 700/s from 16 threads. Each card belongs to one thread, which sends that card's
+  transactions one after another. Because the API answers 202 only after Kafka has the record, and the topic is keyed
+  by card, every card is scored in timestamp order. Spike history, velocity and geo therefore see the card's real
+  past (checked after the run: 0 cards scored out of order).
+- The label stays on the client. Afterwards, `evaluate.py` joins it with the stored decision and the rule hits.
+- Ollama is pointed at a closed port, so the ~46k alert explanations used the rule reasons at once.
+
+All 555,719 POSTs got a 202 (p50 0.8 ms, p99 6.1 ms) and every one was scored (none dead-lettered). Scoring did not
+quite keep up with 700/s here. It averaged about 613/s (first to last scored row: 906 s) and finished about 2
+minutes after the last POST. That doesn't change the results, since each card stays in order. It is lower than the
+load test's ~900/s. The likely differences are that Sparkov cards build up histories of hundreds of transactions and
+that ~8% of transactions open an alert and an explanation (3% in the load test). This was not investigated.
+
+### Results
+
+"Predicted fraud" is either **flagged** (REVIEW or BLOCK, what an analyst would see) or **BLOCK only** (stopped
+outright).
+
+| Predicted fraud when | TP | FP | FN | TN | Precision | Recall | False positive rate |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| REVIEW or BLOCK | 1,115 | 45,267 | 1,030 | 508,307 | 2.40% | 51.98% | 8.18% |
+| BLOCK only | 76 | 819 | 2,069 | 552,755 | 8.49% | 3.54% | 0.15% |
+
+Decisions by label:
+
+| Label | APPROVE | REVIEW | BLOCK | Total |
+|---|---:|---:|---:|---:|
+| Fraud | 1,030 | 1,039 | 76 | 2,145 |
+| Normal | 508,307 | 44,448 | 819 | 553,574 |
+
+How often each rule fired:
+
+| Rule | On fraud | On normal | Precision when it fires |
+|---|---:|---:|---:|
+| AMOUNT_SPIKE | 1,014 (47.27%) | 32,850 (5.93%) | 2.99% |
+| ODD_HOURS | 734 (34.22%) | 90,294 (16.31%) | 0.81% |
+| GEO_MISMATCH | 177 (8.25%) | 13,236 (2.39%) | 1.32% |
+| VELOCITY | 0 | 0 | - |
+| RISKY_MERCHANT | 0 | 0 | - |
+
+What this says:
+- **Flagging catches about half the fraud, but 41 of every 42 flagged transactions are normal.** At a 0.39% base
+  rate, an 8.18% false positive rate means about 45k analyst alerts for 1,115 real frauds.
+- **BLOCK is rare and mostly wrong.** With velocity and risky merchant silent, a score above 70 needs both 40-point
+  rules that did fire, AMOUNT_SPIKE and GEO_MISMATCH (all 895 BLOCKs had both). Geo fires more often on fraud
+  (8.25%) than on normal (2.39%), but the locations it compares are Sparkov's random merchant points, so a fire means
+  two quick transactions far apart in simulated noise, not real travel.
+- **AMOUNT_SPIKE carries the result:** it fires on 47% of fraud and 6% of normal, about 8 times the base rate when it
+  fires. ODD_HOURS fires on a third of the fraud but on a sixth of everything else (2 times the base rate). Alone, at
+  20 points, it never flags anything.
+- **Velocity never fired.** It needs 6 transactions on a card within 60 s. In this data only 2,218 of the ~555k
+  transactions came within 60 s of the same card's previous one.
+
+### Limits
+
+- **Synthetic data from one generator.** The fraud patterns are whatever Sparkov's profiles produce, so these numbers
+  say little about real card fraud. A different generator or real data could rank the rules differently.
+- **Not tuned, on purpose.** Thresholds, points and the risky list are the project defaults, which makes this a fair
+  test of the rules as built, not of the best possible rules for this data.
+- **Two rules can't take part.** The categories never match the risky list, and the per-card transaction rate is far
+  below the velocity limit. Geo runs on simulated merchant coordinates that are noise around home.
+- **Cold start.** The test split starts mid-history, so each card's first transactions in the replay have no history
+  (the spike rule then uses its 5,000 fallback limit).
+- **One run.** The scoring is deterministic given the order, but the laptop numbers (rate, latency) are not repeated
+  measurements.
+
+Possible changes, all **untested hypotheses**. Each would need to be developed on data other than this replay
+(e.g. `fraudTrain.csv`) and confirmed on a held-out set not used to choose it. Numbers from `fraudTest.csv` no
+longer count as unseen for that:
+- Map dataset categories to the risky list only through a definition fixed in advance (what counts as a
+  card-not-present or high-risk category), not through the fraud rate per category.
+- Weigh odd hours against its lift: 20 points on 16% of normal traffic adds review load when combined with the spike.
+- A per-card geo baseline (distance from the card's usual area) instead of the jump between two consecutive
+  transactions, for data where locations are real.
+
 ## Testing
 
 `mvn test` runs 186 tests, all passing at the last run (0 skipped). It needs Docker: tests that touch the database run
@@ -558,7 +680,8 @@ Kafka (`apache/kafka:3.9.2`, same as Compose) and the velocity tests against Red
 Without Docker every container test fails rather than skips. No test needs Ollama or AWS: both are replaced by a
 local stub HTTP server (the JDK's built-in `HttpServer`), and the Bedrock tests run the real AWS SDK client against
 it with fake credentials. Rule, service, mapper, explanation and controller tests use no containers and take well
-under a second in total.
+under a second in total. The accuracy replay's field mapping has its own Python tests (standard library only):
+`python3 -m unittest discover -s accuracy`.
 
 | Layer | Tests | Covers |
 |---|---|---|
@@ -625,5 +748,4 @@ Not built yet:
 - Client idempotency key, so a retried request is not scored, counted or stored twice
 - Splitting ingestion, scoring and alerts into separate deployable services (they are already decoupled by Kafka)
 - Replaying dead-lettered messages
-- Replaying a Kaggle fraud dataset through the API
 

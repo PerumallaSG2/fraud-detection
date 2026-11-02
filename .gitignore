@@ -6,3 +6,6 @@ target/
 CLAUDE.md
 CLAUDE.md
 load-test/results/
+accuracy/data/
+accuracy/work/
+__pycache__/
