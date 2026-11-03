@@ -1,20 +1,43 @@
 # Fraud Detection
 
 [![CI](https://github.com/PerumallaSG2/fraud-detection/actions/workflows/ci.yml/badge.svg)](https://github.com/PerumallaSG2/fraud-detection/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://perumallasg2.github.io/fraud-detection/coverage.json)](https://perumallasg2.github.io/fraud-detection/)
 
-A REST API that scores card transactions for fraud. A client POSTs a transaction (card, amount, merchant,
-category, location, timestamp); it is queued on Kafka and the API answers `202 Accepted` right away. A consumer runs
-it through a set of rules, adds up the points of the rules that fired into a risk score from 0 to 100, and decides:
-APPROVE, REVIEW (a person should look at it) or BLOCK. The score, decision and the rules that fired are stored in
-PostgreSQL, where the client fetches them. Every REVIEW or BLOCK opens an alert, which an analyst resolves as FRAUD or
-FALSE_POSITIVE, and gets a short plain-English explanation written by an LLM (Ollama locally, or Claude on Amazon
-Bedrock), or built from the rule reasons when no model is available. The AI explains; it never decides.
+Real-time card fraud scoring in Java 21 and Spring Boot. A client POSTs a transaction and gets `202 Accepted`; Kafka
+carries it to a rules engine that adds up five rules into a risk score (0-100) and decides APPROVE, REVIEW or BLOCK.
+Every REVIEW or BLOCK opens an alert for an analyst, with a plain-English explanation written by an LLM (Ollama
+locally, or Claude on Amazon Bedrock), or built from the rule reasons when no model is available. **The AI explains;
+it never decides.**
 
-One Spring Boot application with a rules engine, Kafka between ingestion, scoring, alerts and explanations,
-PostgreSQL, and Redis for the velocity counter. Micrometer metrics are scraped by Prometheus and shown on a
-provisioned Grafana dashboard. A k6 load test measures throughput and latency on a laptop (see
-[Load test](#load-test)), and a replay of a labelled synthetic dataset measures precision, recall and false positive
-rate (see [Accuracy](#accuracy-sparkov-replay)).
+## Key results
+
+- **Throughput (one laptop, everything on it):** the API accepted 1,600 transactions/s with POST p99 under 20 ms and
+  no errors; scoring keeps up to about 900/s, and 700/s held for 5 minutes with 0 errors and a 2 ms median from POST
+  to decision. The bottleneck is the 3 scoring threads (one per partition), not CPU or the database. See
+  [Load test](#load-test).
+- **Accuracy on 555,719 labelled synthetic transactions** (Kaggle Sparkov, rules not tuned to it): REVIEW or BLOCK
+  catches 51.98% of fraud at an 8.18% false positive rate (precision 2.40%); BLOCK alone is 3.54% recall at 0.15%
+  FPR. See [Accuracy](#accuracy-sparkov-replay).
+- **Kafka pipeline with at-least-once delivery:** idempotent consumers, per-card ordering, retries and dead-letter
+  topics. See [Delivery guarantees](#delivery-guarantees).
+- **Observable:** Micrometer metrics, Prometheus and a provisioned Grafana dashboard. See [Metrics](#metrics).
+- **186 tests**, run against real PostgreSQL, Kafka and Redis (Testcontainers), with a coverage report published from
+  CI. See [Testing](#testing).
+
+## Quick start
+
+Needs Java 21, Maven and Docker.
+
+```
+docker compose up -d --wait   # PostgreSQL, Redis, Kafka
+mvn spring-boot:run           # app on localhost:8080
+curl -i -X POST localhost:8080/api/transactions -H 'Content-Type: application/json' -d '{
+  "cardId":"c1","amount":120.50,"merchant":"Casino","merchantCategory":"GAMBLING",
+  "city":"Austin","latitude":30.27,"longitude":-97.74,"timestamp":"2026-10-25T02:30:00-05:00"}'
+```
+
+Then GET the returned `Location` for the score and decision (here 50, REVIEW), and `GET /api/alerts` for the alert.
+Details, ports and every endpoint are in [How to run](#how-to-run).
 
 ## Architecture
 
@@ -42,6 +65,9 @@ flowchart TD
     Analyst -->|GET, PATCH /api/alerts| AlertController --> AlertService
     T -.->|after 3 failed attempts| TDLT[["transactions.DLT"]]
     D -.->|after 3 failed attempts| DDLT[["decisions.DLT"]]
+    Process -.->|counters, timers| Metrics["FraudMetrics (Micrometer)<br/>GET /actuator/prometheus"]
+    Prometheus[(Prometheus)] -.->|scrapes every 5 s<br/>profile monitoring| Metrics
+    Grafana -.->|dashboard queries| Prometheus
 ```
 
 - `controller`: HTTP, validation, error responses. It never touches repositories.
@@ -83,7 +109,7 @@ Redis 7 (Spring Data Redis, Lettuce), Apache Kafka 3.9 (Spring for Apache Kafka;
 image), Ollama (`llama3.2:1b`, optional), AWS SDK for Java 2 (`bedrockruntime`, Converse API, only with the
 `bedrock` profile), Spring Boot Actuator, Micrometer with the Prometheus registry, Prometheus 3.15 and Grafana 13.3
 (optional, Compose profile `monitoring`), Docker Compose, k6 (load test). Tests use JUnit 5, Mockito, AssertJ, Awaitility and Testcontainers
-(PostgreSQL, Redis, Kafka).
+(PostgreSQL, Redis, Kafka); JaCoCo measures coverage.
 
 ## How to run
 
@@ -384,7 +410,7 @@ capacity:** k6, the app, PostgreSQL, Kafka, Redis, Prometheus and Grafana all sh
 ```
 brew install k6
 docker compose --profile monitoring up -d --wait
-mvn -DskipTests package && java -jar target/fraud-detection-0.0.1-SNAPSHOT.jar
+mvn -DskipTests package && java -jar target/fraud-detection-1.0.0.jar
 load-test/run.sh smoke                       # 10/s for 20 s: checks the script and the expected decisions
 load-test/run.sh steps                       # 25, 50, 100, 200, 400, 800, 1600 /s; STEPS=900,1000 for others
 RATE=700 load-test/run.sh sustain            # stages up to RATE, then a 5 minute hold (HOLD_S)
@@ -591,7 +617,7 @@ Not sent: `first`, `last`, `gender`, `street`, `zip`, `dob`, `job`, `city_pop`, 
 
 ```
 docker compose up -d --wait
-mvn -DskipTests package && OLLAMA_URL=http://localhost:1 java -jar target/fraud-detection-0.0.1-SNAPSHOT.jar
+mvn -DskipTests package && OLLAMA_URL=http://localhost:1 java -jar target/fraud-detection-1.0.0.jar
 accuracy/run.sh run       # RATE=700 by default; LIMIT=2000 RATE=50 for a smoke run
 accuracy/run.sh purge     # afterwards: delete the sp-% rows, the dataset and the per-row work files
 ```
@@ -683,6 +709,12 @@ it with fake credentials. Rule, service, mapper, explanation and controller test
 under a second in total. The accuracy replay's field mapping has its own Python tests (standard library only):
 `python3 -m unittest discover -s accuracy`.
 
+Coverage: `mvn test` also writes a JaCoCo report to `target/site/jacoco/index.html`. At v1.0.0 it was 98% of
+instructions, 94% of branches and 98% of lines (no classes excluded). CI puts the totals in each run's summary,
+uploads the report as an artifact, and on `main` publishes it to
+[GitHub Pages](https://perumallasg2.github.io/fraud-detection/), which is also where the badge reads from. The build
+has no coverage threshold.
+
 | Layer | Tests | Covers |
 |---|---|---|
 | Rules | 39 | Each rule's boundaries, offsets, case-insensitivity, history baseline, BLOCK exclusion; velocity limit, one count call, empty count; geo distance, speed limit, out-of-order timestamps |
@@ -741,11 +773,15 @@ explanations fall back to the rule reasons.
   if the save fails after scoring and the message ends up dead-lettered, that attempt stays counted for up to 60
   seconds. (A retry that succeeds isn't counted twice: same id.)
 
-## Roadmap
+## Future work
 
-Not built yet:
+Next steps, each based on a limit measured or described above:
 
-- Client idempotency key, so a retried request is not scored, counted or stored twice
-- Splitting ingestion, scoring and alerts into separate deployable services (they are already decoupled by Kafka)
-- Replaying dead-lettered messages
-
+- **Client idempotency key**, so a retried POST is not scored, counted and stored twice.
+- **Dead-letter replay** tooling; replaying a DLT is manual today.
+- **Raise the scoring ceiling** (about 900/s on the laptop): more partitions with matching listener concurrency,
+  batched inserts and commits, and not waiting for each decision's publish on the scoring thread.
+- **Rule changes developed on `fraudTrain.csv`** and confirmed on held-out data (risky categories fixed in advance,
+  odd-hours weight, a per-card geo baseline); see [Limits](#limits).
+- **Committed-offset consumer lag** per group, since `records_lag_max` hides backlogs under one poll batch.
+- **Separately deployable services** for ingestion, scoring and alerts, which Kafka already decouples.

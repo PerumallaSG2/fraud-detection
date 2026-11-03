@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -27,3 +30,57 @@ jobs:
             exit 1
           fi
           echo "No skipped tests."
+
+      # Totals from JaCoCo's CSV (written by `mvn test`): a table in the job summary, and coverage.json, a
+      # shields.io endpoint badge (instruction coverage, the headline "Total" of the HTML report).
+      - name: Coverage summary
+        run: |
+          awk -F, 'NR > 1 { im += $4; ic += $5; bm += $6; bc += $7; lm += $8; lc += $9 }
+            function pct(c, m) { return (c + m) ? 100 * c / (c + m) : 0 }
+            END {
+              printf "| Counter | Covered | Total | Coverage |\n|---|---:|---:|---:|\n"
+              printf "| Instructions | %d | %d | %.1f%% |\n", ic, ic + im, pct(ic, im)
+              printf "| Branches | %d | %d | %.1f%% |\n", bc, bc + bm, pct(bc, bm)
+              printf "| Lines | %d | %d | %.1f%% |\n", lc, lc + lm, pct(lc, lm)
+              p = pct(ic, im); color = p >= 80 ? "brightgreen" : (p >= 60 ? "yellow" : "red")
+              printf "{\"schemaVersion\":1,\"label\":\"coverage\",\"message\":\"%d%%\",\"color\":\"%s\"}\n", p, color > "target/coverage.json"
+            }' target/site/jacoco/jacoco.csv >> "$GITHUB_STEP_SUMMARY"
+          cat target/coverage.json
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v7
+        with:
+          name: jacoco-report
+          path: target/site/jacoco
+          retention-days: 14
+
+      # main only: the HTML report and coverage.json go to GitHub Pages (no commits, no secrets)
+      - name: Prepare Pages site
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          mkdir _site
+          cp -R target/site/jacoco/. _site/
+          cp target/coverage.json _site/coverage.json
+
+      - name: Upload Pages artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy-coverage:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
