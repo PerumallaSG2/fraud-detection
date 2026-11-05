@@ -3,8 +3,6 @@ target/
 *.iml
 .vscode/
 .DS_Store
-CLAUDE.md
-CLAUDE.md
 load-test/results/
 accuracy/data/
 accuracy/work/
